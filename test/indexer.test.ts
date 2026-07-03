@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { VaultIndexer } from '../src/rag/store';
+import { LEGACY_STORAGE_DIR_NAME, STORAGE_DIR_NAME, VaultIndexer } from '../src/rag/store';
 import md5 from 'md5';
 
 // Mock the embedder to avoid loading real models during tests
@@ -35,7 +35,7 @@ describe('VaultIndexer path resolution and storage', () => {
 
   beforeEach(async () => {
     mockHomedir = null;
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gemini-obsidian-test-'));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'obsidian-vault-mcp-test-'));
     vaultPath = path.join(tempDir, 'my-vault');
     workspacePath = path.join(tempDir, 'my-workspace');
     await fs.mkdir(vaultPath, { recursive: true });
@@ -60,8 +60,8 @@ describe('VaultIndexer path resolution and storage', () => {
     await indexer.indexVault(vaultPath, false, workspacePath);
 
     const vaultHash = md5(path.resolve(vaultPath));
-    const expectedDbPath = path.join(workspacePath, '.gemini-obsidian', 'vaults', vaultHash, 'lancedb');
-    const expectedHashPath = path.join(workspacePath, '.gemini-obsidian', 'vaults', vaultHash, 'file-hashes.json');
+    const expectedDbPath = path.join(workspacePath, STORAGE_DIR_NAME, 'vaults', vaultHash, 'lancedb');
+    const expectedHashPath = path.join(workspacePath, STORAGE_DIR_NAME, 'vaults', vaultHash, 'file-hashes.json');
 
     const dbExists = await fs.stat(expectedDbPath).then(() => true).catch(() => false);
     const hashExists = await fs.stat(expectedHashPath).then(() => true).catch(() => false);
@@ -78,8 +78,8 @@ describe('VaultIndexer path resolution and storage', () => {
     await indexer.indexVault(vaultPath, false, workspacePath, customVaultId);
 
     // Vault hash should be our custom ID, not the MD5 hash
-    const expectedDbPath = path.join(workspacePath, '.gemini-obsidian', 'vaults', customVaultId, 'lancedb');
-    const expectedHashPath = path.join(workspacePath, '.gemini-obsidian', 'vaults', customVaultId, 'file-hashes.json');
+    const expectedDbPath = path.join(workspacePath, STORAGE_DIR_NAME, 'vaults', customVaultId, 'lancedb');
+    const expectedHashPath = path.join(workspacePath, STORAGE_DIR_NAME, 'vaults', customVaultId, 'file-hashes.json');
 
     const dbExists = await fs.stat(expectedDbPath).then(() => true).catch(() => false);
     const hashExists = await fs.stat(expectedHashPath).then(() => true).catch(() => false);
@@ -88,7 +88,7 @@ describe('VaultIndexer path resolution and storage', () => {
     expect(hashExists).toBe(true);
 
     // Ensure it used exactly our ID in the vaults directory
-    const vaultsDir = path.join(workspacePath, '.gemini-obsidian', 'vaults');
+    const vaultsDir = path.join(workspacePath, STORAGE_DIR_NAME, 'vaults');
     const folders = await fs.readdir(vaultsDir);
     expect(folders).toContain(customVaultId);
     expect(folders.length).toBe(1);
@@ -103,7 +103,7 @@ describe('VaultIndexer path resolution and storage', () => {
     }
 
     // Ensure no directories were created for malicious IDs
-    const vaultsDir = path.join(workspacePath, '.gemini-obsidian', 'vaults');
+    const vaultsDir = path.join(workspacePath, STORAGE_DIR_NAME, 'vaults');
     const exists = await fs.stat(vaultsDir).then(() => true).catch(() => false);
     if (exists) {
       const folders = await fs.readdir(vaultsDir);
@@ -118,7 +118,7 @@ describe('VaultIndexer path resolution and storage', () => {
     const vaultHash = md5(path.resolve(vaultPath));
     // Set the mock homedir to our temp test dir
     mockHomedir = tempDir;
-    const expectedGlobalPath = path.join(tempDir, '.gemini-obsidian', 'vaults', vaultHash);
+    const expectedGlobalPath = path.join(tempDir, STORAGE_DIR_NAME, 'vaults', vaultHash);
     
     await indexer.indexVault(vaultPath, false);
 
@@ -152,7 +152,7 @@ describe('VaultIndexer path resolution and storage', () => {
     
     const lancedb = await import('@lancedb/lancedb');
     const vaultHash = md5(path.resolve(vaultPath));
-    const dbPath = path.join(workspacePath, '.gemini-obsidian', 'vaults', vaultHash, 'lancedb');
+    const dbPath = path.join(workspacePath, STORAGE_DIR_NAME, 'vaults', vaultHash, 'lancedb');
     
     const db = await lancedb.connect(dbPath);
     try {
@@ -238,7 +238,7 @@ describe('VaultIndexer path resolution and storage', () => {
     const vaultHash = md5(path.resolve(vaultPath));
     const hashPath = path.join(
       workspacePath,
-      '.gemini-obsidian',
+      STORAGE_DIR_NAME,
       'vaults',
       vaultHash,
       'file-hashes.json',
@@ -246,5 +246,19 @@ describe('VaultIndexer path resolution and storage', () => {
     const hashes = JSON.parse(await fs.readFile(hashPath, 'utf-8'));
     expect(hashes[sourceRelativePath]).toBeUndefined();
     expect(hashes[destRelativePath]).toBe(md5(content));
+  });
+
+  it('migrates an existing legacy storage root to the neutral storage root', async () => {
+    await fs.writeFile(path.join(vaultPath, 'note.md'), 'This is a sufficiently long note to pass the minimum chunk size filter of forty characters.', 'utf-8');
+
+    const legacyRoot = path.join(workspacePath, LEGACY_STORAGE_DIR_NAME);
+    const markerPath = path.join(legacyRoot, 'vaults', 'legacy-marker', 'marker.txt');
+    await fs.mkdir(path.dirname(markerPath), { recursive: true });
+    await fs.writeFile(markerPath, 'keep me', 'utf-8');
+
+    await indexer.indexVault(vaultPath, false, workspacePath);
+
+    await expect(fs.stat(path.join(workspacePath, LEGACY_STORAGE_DIR_NAME))).rejects.toThrow();
+    await expect(fs.readFile(path.join(workspacePath, STORAGE_DIR_NAME, 'vaults', 'legacy-marker', 'marker.txt'), 'utf-8')).resolves.toBe('keep me');
   });
 });

@@ -1,13 +1,13 @@
 {
-  "name": "gemini-obsidian",
+  "name": "obsidian-vault-mcp",
   "version": "2.0.0",
-  "description": "Obsidian Vault integration with local RAG capabilities for Codex CLI.",
+  "description": "Obsidian vault MCP server with local RAG capabilities for Codex CLI.",
   "author": {
-    "name": "thoreinstein",
-    "url": "https://github.com/thoreinstein"
+    "name": "jabez007",
+    "url": "https://github.com/jabez007"
   },
-  "homepage": "https://github.com/thoreinstein/gemini-obsidian",
-  "repository": "https://github.com/thoreinstein/gemini-obsidian",
+  "homepage": "https://github.com/jabez007/obsidian-vault-mcp",
+  "repository": "https://github.com/jabez007/obsidian-vault-mcp",
   "license": "MIT",
   "keywords": [
     "codex",
@@ -21,14 +21,14 @@
     "displayName": "Obsidian Vault",
     "shortDescription": "Search, read, and maintain an Obsidian vault from Codex.",
     "longDescription": "Adds Obsidian vault tools, local RAG retrieval, and note-management skills to Codex using the shared MCP server in this repository.",
-    "developerName": "thoreinstein",
+    "developerName": "jabez007",
     "category": "Productivity",
     "capabilities": [
       "Search",
       "Read",
       "Write"
     ],
-    "websiteURL": "https://github.com/thoreinstein/gemini-obsidian",
+    "websiteURL": "https://github.com/jabez007/obsidian-vault-mcp",
     "defaultPrompt": [
       "Search my Obsidian vault for notes about {{topic}}.",
       "Index my vault and tell me if anything failed.",

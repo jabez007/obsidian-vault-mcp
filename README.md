@@ -1,6 +1,6 @@
-# Gemini Obsidian MCP
+# Obsidian Vault MCP
 
-This project integrates your **Obsidian Vault** into both **Codex** and the legacy **Gemini CLI** extension system. It exposes the same local MCP server in both hosts so you can read, search, connect, and maintain notes from either workflow.
+This project integrates your **Obsidian Vault** into Codex and other MCP-capable hosts, while retaining compatibility with the legacy Gemini CLI extension manifest. It exposes a local MCP server so you can read, search, connect, and maintain notes from your workflow.
 
 ## Features
 
@@ -18,14 +18,14 @@ This project integrates your **Obsidian Vault** into both **Codex** and the lega
 ## Prerequisites
 
 - **Node.js**: v20 or higher.
-- **Codex CLI** or **Gemini CLI**.
+- **Codex CLI** or another MCP-capable host.
 - **Obsidian Vault**: A local folder containing your markdown notes.
 
 ## Installation
 
 ### Codex plugin
 
-This repo now includes a repo-scoped Codex marketplace at `.agents/plugins/marketplace.json` and a dedicated plugin wrapper at `plugins/gemini-obsidian/`. The Codex plugin launches the shared MCP server from `dist/index.js`, so the server implementation stays shared with the Gemini extension.
+This repo includes a repo-scoped Codex marketplace at `.agents/plugins/marketplace.json` and a dedicated plugin wrapper at `plugins/obsidian-vault-mcp/`. The Codex plugin launches the shared MCP server from `dist/index.js`, so the server implementation stays shared with other host manifests.
 
 ```sh
 npm install
@@ -38,21 +38,21 @@ Then open Codex in this repository, restart if it was already running, and insta
 /plugins
 ```
 
-Look for the `Gemini Obsidian Repo` marketplace and install `Obsidian Vault`.
+Look for the `Obsidian Vault MCP Repo` marketplace and install `Obsidian Vault`.
 
 If you want to use this repository as a marketplace source from outside the repo checkout, add it explicitly:
 
 ```sh
-codex plugin marketplace add /absolute/path/to/gemini-obsidian
+codex plugin marketplace add /absolute/path/to/obsidian-vault-mcp
 ```
 
-### Gemini CLI extension
+### Legacy Gemini CLI extension
 
 Gemini compatibility remains in place through `gemini-extension.json`:
 
 ```sh
-gemini extensions install https://github.com/thoreinstein/gemini-obsidian
-cd ~/.gemini/extensions/gemini-obsidian && npm install && npm run build
+gemini extensions install https://github.com/jabez007/obsidian-vault-mcp
+cd ~/.gemini/extensions/obsidian-vault-mcp && npm install && npm run build
 ```
 
 ## Configuration
@@ -74,7 +74,7 @@ Also supported for backward compatibility: `CODEX_OBSIDIAN_*` and `GEMINI_OBSIDI
 
 ### Option 2: Runtime configuration
 
-The first time you use a tool, the server can persist `vault_path`, `workspace_path`, and `vault_id`. It now reads the neutral config path `~/.obsidian-mcp.config.json` and still falls back to the legacy Gemini path `~/.gemini-obsidian.config.json`.
+The first time you use a tool, the server can persist `vault_path`, `workspace_path`, and `vault_id`. The config source of truth is now `~/.obsidian-mcp.config.json`. The server still reads the legacy `~/.gemini-obsidian.config.json` as a fallback, but new writes no longer update that legacy file.
 
 ## Data Storage & Troubleshooting
 
@@ -83,9 +83,10 @@ The first time you use a tool, the server can persist `vault_path`, `workspace_p
   - By default, this is an **MD5 hash of the absolute vault path**.
   - If a **`vault_id`** is provided (via env var or config), it is used directly instead of the path hash. This is recommended if you sync your vault across machines where absolute paths might differ.
   - Storage location:
-    - If a **workspace path** is configured, metadata is stored in `<workspace_path>/.gemini-obsidian/vaults/<vault_identifier>/`.
-    - Otherwise, it defaults to a **Hashed Global Cache** in `~/.gemini-obsidian/vaults/<vault_identifier>/`.
-- **Cache Reset**: If you suspect the index is corrupted or want a fresh start, you can manually delete the vault-specific folder (`.gemini-obsidian/vaults/<vault_identifier>`) in your workspace or the corresponding entry in the global cache. The next time you run `obsidian_rag_index`, it will be recreated.
+    - If a **workspace path** is configured, metadata is stored in `<workspace_path>/.obsidian-vault-mcp/vaults/<vault_identifier>/`.
+    - Otherwise, it defaults to a **Hashed Global Cache** in `~/.obsidian-vault-mcp/vaults/<vault_identifier>/`.
+  - On first access, if `.gemini-obsidian` exists and `.obsidian-vault-mcp` does not, the server automatically migrates the old storage directory to the neutral name so existing indexes are preserved.
+- **Cache Reset**: If you suspect the index is corrupted or want a fresh start, you can manually delete the vault-specific folder (`.obsidian-vault-mcp/vaults/<vault_identifier>`) in your workspace or the corresponding entry in the global cache. The next time you run `obsidian_rag_index`, it will be recreated.
 - **Module Not Found Error**: If you see an error like `Cannot find module '@lancedb/lancedb'`, run `npm install` in the repo or installed extension/plugin directory.
 - **Logs**: Since this runs as an MCP server, errors are typically output to stderr.
 
@@ -114,10 +115,14 @@ node dist/index.js obsidian_rag_index
 
 ## Host-specific assets
 
-- **Codex** uses `.agents/plugins/marketplace.json` and the plugin wrapper under `plugins/gemini-obsidian/`.
-- **Gemini CLI** continues to use `gemini-extension.json`, `commands/`, and `hooks/hooks.json`.
+- **Codex** uses `.agents/plugins/marketplace.json` and the plugin wrapper under `plugins/obsidian-vault-mcp/`.
+- **Legacy Gemini CLI** continues to use `gemini-extension.json`, `commands/`, and `hooks/hooks.json`.
 - **Shared behavior**: both hosts use the same MCP server build from `dist/index.js`, and note-writing MCP tools re-index the changed note inside the server.
 - **Compatibility note**: the Codex wrapper intentionally does not bundle hooks yet. Gemini keeps `hooks/hooks.json`, while Codex relies on the in-server post-write reindex flow and avoids cross-host hook drift.
+
+## Versioning
+
+`package.json` is the version source of truth. `gemini-extension.json`, both `.codex-plugin/plugin.json` files, and the MCP server constructor derive from or are tested against the package version so release metadata stays aligned.
 
 ## Available Tools
 

@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.0] - 2026-07-03
+
+### Breaking Changes
+
+- Renamed the project from `gemini-obsidian` to `obsidian-vault-mcp`. The MCP
+  server key in host configs and the Codex plugin name changed accordingly —
+  update any configuration referencing `gemini-obsidian` and reinstall the
+  Codex plugin from the repo marketplace.
+- Configuration writes now go only to `~/.obsidian-mcp.config.json`. The
+  legacy `~/.gemini-obsidian.config.json` is still read as a fallback but is
+  no longer updated.
+
+### Features
+
+- Storage roots migrate automatically: on first access, an existing
+  `.gemini-obsidian/` storage directory (global or workspace) is renamed to
+  `.obsidian-vault-mcp/`, preserving indexes and file hashes.
+- The MCP server reads its name and version from `package.json` at runtime,
+  and tests enforce that all host manifests match the package version.
+
+### Refactor
+
+- Extracted all 18 tools into a single registry (`src/tools/`) that generates
+  the MCP tool list, MCP dispatch, and CLI one-shot dispatch from one source.
+- Fixed CLI boolean flag parsing (`--force_reindex true` previously did
+  nothing) and `obsidian_rag_query` relevance output (hybrid search returns
+  `_relevance_score`, which previously printed as `undefined`).
+
 ## [1.8.2] - 2026-05-12
 
 ### Features

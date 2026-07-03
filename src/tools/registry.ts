@@ -84,7 +84,7 @@ export const obsidianTools: ObsidianTool[] = [
                 workspace_path: {
                     type: "string",
                     description:
-                        "Optional absolute path to the workspace root where .gemini-obsidian should be created.",
+                        "Optional absolute path to the workspace root where .obsidian-vault-mcp should be created.",
                 },
                 vault_id: {
                     type: "string",

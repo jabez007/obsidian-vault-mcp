@@ -8,7 +8,7 @@ description: >-
   documented thoughts.
 kind: local
 tools:
-  - mcp_gemini-obsidian_*
+  - mcp_obsidian-vault-mcp_*
 max_turns: 30
 timeout_mins: 10
 ---

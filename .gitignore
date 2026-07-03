@@ -1,7 +1,9 @@
 node_modules
-.gemini-obsidian-lancedb
 .DS_Store
 *.log
 
 !dist/
 .aider*
+.cache/
+.gemini-obsidian/
+.obsidian-vault-mcp/

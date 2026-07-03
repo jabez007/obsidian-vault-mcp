@@ -1,7 +1,7 @@
 {
-  "name": "gemini-obsidian",
+  "name": "obsidian-vault-mcp",
   "version": "2.0.0",
-  "description": "Obsidian Vault integration with local RAG capabilities for Gemini CLI and Codex",
+  "description": "Obsidian vault MCP server with local RAG capabilities for Codex and compatible MCP hosts",
   "main": "dist/index.js",
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js --format=cjs --external:@lancedb/lancedb --external:onnxruntime-node --external:sharp --banner:js=\"var import_meta = { url: 'file://' + __filename };\" --define:import.meta=import_meta",
@@ -13,8 +13,6 @@
   "keywords": [
     "codex",
     "plugin",
-    "gemini-cli",
-    "extension",
     "obsidian",
     "rag",
     "lancedb",
@@ -23,15 +21,15 @@
     "vector-search",
     "mcp"
   ],
-  "author": "thoreinstein",
+  "author": "jabez007",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/thoreinstein/gemini-obsidian.git"
+    "url": "https://github.com/jabez007/obsidian-vault-mcp.git"
   },
-  "homepage": "https://github.com/thoreinstein/gemini-obsidian",
+  "homepage": "https://github.com/jabez007/obsidian-vault-mcp",
   "bugs": {
-    "url": "https://github.com/thoreinstein/gemini-obsidian/issues"
+    "url": "https://github.com/jabez007/obsidian-vault-mcp/issues"
   },
   "type": "commonjs",
   "engines": {

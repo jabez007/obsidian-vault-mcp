@@ -62135,6 +62135,8 @@ var init_chunking = __esm({
 // src/rag/store.ts
 var store_exports = {};
 __export(store_exports, {
+  LEGACY_STORAGE_DIR_NAME: () => LEGACY_STORAGE_DIR_NAME,
+  STORAGE_DIR_NAME: () => STORAGE_DIR_NAME,
   VaultIndexer: () => VaultIndexer
 });
 function getFirstNumericEnv(keys, fallback) {
@@ -62156,7 +62158,7 @@ function chunkingOptionsFromEnv() {
   const target = Number.isFinite(targetRaw) && targetRaw > min2 ? Math.floor(targetRaw) : 700;
   return { minChunkChars: min2, maxChunkChars: max2, targetChunkChars: target };
 }
-var lancedb, fs6, path6, os2, import_gray_matter2, import_md52, VaultIndexer;
+var lancedb, fs6, path6, os2, import_gray_matter2, import_md52, STORAGE_DIR_NAME, LEGACY_STORAGE_DIR_NAME, VaultIndexer;
 var init_store = __esm({
   "src/rag/store.ts"() {
     "use strict";
@@ -62170,6 +62172,8 @@ var init_store = __esm({
     init_embedder();
     init_chunking();
     init_utils();
+    STORAGE_DIR_NAME = ".obsidian-vault-mcp";
+    LEGACY_STORAGE_DIR_NAME = ".gemini-obsidian";
     VaultIndexer = class {
       db = null;
       currentDbPath = null;
@@ -62207,7 +62211,7 @@ var init_store = __esm({
         return normalized;
       }
       async getPaths(vaultPath, workspacePath, vaultId) {
-        let baseStorePath;
+        let vaultIdentifier;
         if (workspacePath) {
           if (!path6.isAbsolute(workspacePath)) {
             throw new Error(`Invalid workspace_path: must be an absolute path. Received: ${workspacePath}`);
@@ -62220,23 +62224,34 @@ var init_store = __esm({
           if (vaultId.includes("/") || vaultId.includes("\\") || vaultId.includes("..")) {
             throw new Error("Invalid vault_id: separators and traversal are not allowed");
           }
-          if (workspacePath) {
-            baseStorePath = path6.join(workspacePath, ".gemini-obsidian", "vaults", vaultId);
-          } else {
-            baseStorePath = path6.join(os2.homedir(), ".gemini-obsidian", "vaults", vaultId);
-          }
+          vaultIdentifier = vaultId;
         } else {
-          const vaultHash = (0, import_md52.default)(path6.resolve(vaultPath));
-          if (workspacePath) {
-            baseStorePath = path6.join(workspacePath, ".gemini-obsidian", "vaults", vaultHash);
-          } else {
-            baseStorePath = path6.join(os2.homedir(), ".gemini-obsidian", "vaults", vaultHash);
-          }
+          vaultIdentifier = (0, import_md52.default)(path6.resolve(vaultPath));
         }
+        const storageParent = workspacePath || os2.homedir();
+        const storageRoot = await this.getStorageRoot(storageParent);
+        const baseStorePath = path6.join(storageRoot, "vaults", vaultIdentifier);
         const dbPath = path6.join(baseStorePath, "lancedb");
         const hashPath = path6.join(baseStorePath, "file-hashes.json");
         await fs6.mkdir(baseStorePath, { recursive: true });
         return { dbPath, hashPath };
+      }
+      async getStorageRoot(storageParent) {
+        const newRoot = path6.join(storageParent, STORAGE_DIR_NAME);
+        const oldRoot = path6.join(storageParent, LEGACY_STORAGE_DIR_NAME);
+        const [newExists, oldExists] = await Promise.all([
+          fs6.stat(newRoot).then(() => true).catch(() => false),
+          fs6.stat(oldRoot).then(() => true).catch(() => false)
+        ]);
+        if (!newExists && oldExists) {
+          try {
+            await fs6.rename(oldRoot, newRoot);
+          } catch (error2) {
+            const migrated = await fs6.stat(newRoot).then(() => true).catch(() => false);
+            if (!migrated) throw error2;
+          }
+        }
+        return newRoot;
       }
       async getDb(vaultPath, workspacePath, vaultId) {
         const { dbPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
@@ -62838,7 +62853,7 @@ var obsidianTools = [
         },
         workspace_path: {
           type: "string",
-          description: "Optional absolute path to the workspace root where .gemini-obsidian should be created."
+          description: "Optional absolute path to the workspace root where .obsidian-vault-mcp should be created."
         },
         vault_id: {
           type: "string",
@@ -63695,9 +63710,12 @@ async function dispatchCliTool(argv, context, readStdin2) {
 
 // src/index.ts
 var CONFIG_PATHS = [
-  path7.join(os3.homedir(), ".obsidian-mcp.config.json"),
+  path7.join(os3.homedir(), ".obsidian-mcp.config.json")
+];
+var LEGACY_CONFIG_PATHS = [
   path7.join(os3.homedir(), ".gemini-obsidian.config.json")
 ];
+var PROJECT_NAME = "obsidian-vault-mcp";
 function assertNativeDependencies() {
   try {
     require.resolve("@lancedb/lancedb");
@@ -63760,7 +63778,7 @@ async function saveConfig(options2) {
   }
 }
 async function loadConfig2() {
-  for (const configPath of CONFIG_PATHS) {
+  for (const configPath of [...CONFIG_PATHS, ...LEGACY_CONFIG_PATHS]) {
     try {
       const data = await fs7.readFile(configPath, "utf-8");
       const config2 = JSON.parse(data);
@@ -63778,6 +63796,19 @@ async function loadConfig2() {
     workspace_path: null,
     vault_id: null
   };
+}
+async function loadPackageMetadata() {
+  const packageJsonPath = path7.join(__dirname, "..", "package.json");
+  try {
+    const data = await fs7.readFile(packageJsonPath, "utf-8");
+    const packageJson = JSON.parse(data);
+    return {
+      name: String(packageJson.name || PROJECT_NAME),
+      version: String(packageJson.version || "0.0.0")
+    };
+  } catch {
+    return { name: PROJECT_NAME, version: "0.0.0" };
+  }
 }
 function createToolContext(indexer, initialConfig) {
   const config2 = { ...initialConfig };
@@ -63872,6 +63903,7 @@ async function main() {
     new VaultIndexer2(),
     await buildInitialConfig()
   );
+  const packageMetadata = await loadPackageMetadata();
   const cliResult = await dispatchCliTool(
     process.argv.slice(2),
     context,
@@ -63889,8 +63921,8 @@ async function main() {
   }
   const server = new Server2(
     {
-      name: "gemini-obsidian",
-      version: "2.0.0"
+      name: packageMetadata.name,
+      version: packageMetadata.version
     },
     {
       capabilities: {

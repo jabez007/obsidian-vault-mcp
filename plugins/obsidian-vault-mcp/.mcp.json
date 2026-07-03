@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "gemini-obsidian": {
+    "obsidian-vault-mcp": {
       "command": "node",
       "args": [
         "../../dist/index.js"

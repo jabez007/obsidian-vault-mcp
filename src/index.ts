@@ -20,8 +20,11 @@ export { getDailyNoteConfig };
 
 const CONFIG_PATHS = [
     path.join(os.homedir(), ".obsidian-mcp.config.json"),
+];
+const LEGACY_CONFIG_PATHS = [
     path.join(os.homedir(), ".gemini-obsidian.config.json"),
 ];
+const PROJECT_NAME = "obsidian-vault-mcp";
 
 function assertNativeDependencies() {
     try {
@@ -87,7 +90,7 @@ async function saveConfig(options: SetConfigOptions) {
 }
 
 async function loadConfig(): Promise<ToolConfig> {
-    for (const configPath of CONFIG_PATHS) {
+    for (const configPath of [...CONFIG_PATHS, ...LEGACY_CONFIG_PATHS]) {
         try {
             const data = await fs.readFile(configPath, "utf-8");
             const config = JSON.parse(data);
@@ -105,6 +108,20 @@ async function loadConfig(): Promise<ToolConfig> {
         workspace_path: null,
         vault_id: null,
     };
+}
+
+async function loadPackageMetadata(): Promise<{ name: string; version: string }> {
+    const packageJsonPath = path.join(__dirname, "..", "package.json");
+    try {
+        const data = await fs.readFile(packageJsonPath, "utf-8");
+        const packageJson = JSON.parse(data);
+        return {
+            name: String(packageJson.name || PROJECT_NAME),
+            version: String(packageJson.version || "0.0.0"),
+        };
+    } catch {
+        return { name: PROJECT_NAME, version: "0.0.0" };
+    }
 }
 
 function createToolContext(
@@ -216,6 +233,7 @@ export async function main() {
         new VaultIndexer(),
         await buildInitialConfig(),
     );
+    const packageMetadata = await loadPackageMetadata();
 
     const cliResult = await dispatchCliTool(
         process.argv.slice(2),
@@ -235,8 +253,8 @@ export async function main() {
 
     const server = new Server(
         {
-            name: "gemini-obsidian",
-            version: "2.0.0",
+            name: packageMetadata.name,
+            version: packageMetadata.version,
         },
         {
             capabilities: {

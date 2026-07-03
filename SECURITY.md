@@ -2,9 +2,9 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in gemini-obsidian, please report it responsibly.
+If you discover a security vulnerability in obsidian-vault-mcp, please report it responsibly.
 
-**Do not open a public issue.** Instead, email the maintainer or use GitHub's [private vulnerability reporting](https://github.com/thoreinstein/gemini-obsidian/security/advisories/new).
+**Do not open a public issue.** Instead, use GitHub's [private vulnerability reporting](https://github.com/jabez007/obsidian-vault-mcp/security/advisories/new).
 
 Please include:
 - Description of the vulnerability
@@ -13,7 +13,7 @@ Please include:
 
 ## Scope
 
-gemini-obsidian runs entirely locally — no data is sent to external services. The primary security considerations are:
+obsidian-vault-mcp runs entirely locally — no data is sent to external services. The primary security considerations are:
 
 - **File system access** — the extension reads and writes files in your Obsidian vault
 - **Local embedding model** — runs via onnxruntime-node, no network calls

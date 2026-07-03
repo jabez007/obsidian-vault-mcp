@@ -23,7 +23,7 @@ describe('Graph-aware RAG', () => {
   let indexer: VaultIndexer;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gemini-obsidian-graph-test-'));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'obsidian-vault-mcp-graph-test-'));
     vaultPath = path.join(tempDir, 'my-vault');
     workspacePath = path.join(tempDir, 'my-workspace');
     await fs.mkdir(vaultPath, { recursive: true });

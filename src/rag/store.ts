@@ -34,6 +34,9 @@ interface NoteChunk extends NoteMetadata {
   vector: number[];
 }
 
+export const STORAGE_DIR_NAME = '.obsidian-vault-mcp';
+export const LEGACY_STORAGE_DIR_NAME = '.gemini-obsidian';
+
 export interface IndexResult {
   success: boolean;
   chunks?: number;
@@ -87,7 +90,7 @@ export class VaultIndexer {
   }
 
   private async getPaths(vaultPath: string, workspacePath?: string | null, vaultId?: string | null) {
-    let baseStorePath: string;
+    let vaultIdentifier: string;
     
     if (workspacePath) {
       if (!path.isAbsolute(workspacePath)) {
@@ -103,22 +106,14 @@ export class VaultIndexer {
       if (vaultId.includes('/') || vaultId.includes('\\') || vaultId.includes('..')) {
         throw new Error('Invalid vault_id: separators and traversal are not allowed');
       }
-
-      if (workspacePath) {
-        baseStorePath = path.join(workspacePath, '.gemini-obsidian', 'vaults', vaultId);
-      } else {
-        // Shared metadata across machines: ~/.gemini-obsidian/vaults/<vaultId>
-        baseStorePath = path.join(os.homedir(), '.gemini-obsidian', 'vaults', vaultId);
-      }
+      vaultIdentifier = vaultId;
     } else {
-      const vaultHash = md5(path.resolve(vaultPath));
-      if (workspacePath) {
-        baseStorePath = path.join(workspacePath, '.gemini-obsidian', 'vaults', vaultHash);
-      } else {
-        // Hashed Global Cache: ~/.gemini-obsidian/vaults/<hash_of_vault_path>
-        baseStorePath = path.join(os.homedir(), '.gemini-obsidian', 'vaults', vaultHash);
-      }
+      vaultIdentifier = md5(path.resolve(vaultPath));
     }
+
+    const storageParent = workspacePath || os.homedir();
+    const storageRoot = await this.getStorageRoot(storageParent);
+    const baseStorePath = path.join(storageRoot, 'vaults', vaultIdentifier);
 
     const dbPath = path.join(baseStorePath, 'lancedb');
     const hashPath = path.join(baseStorePath, 'file-hashes.json');
@@ -127,6 +122,30 @@ export class VaultIndexer {
     await fs.mkdir(baseStorePath, { recursive: true });
     
     return { dbPath, hashPath };
+  }
+
+  private async getStorageRoot(storageParent: string): Promise<string> {
+    const newRoot = path.join(storageParent, STORAGE_DIR_NAME);
+    const oldRoot = path.join(storageParent, LEGACY_STORAGE_DIR_NAME);
+    const [newExists, oldExists] = await Promise.all([
+      fs.stat(newRoot).then(() => true).catch(() => false),
+      fs.stat(oldRoot).then(() => true).catch(() => false),
+    ]);
+
+    if (!newExists && oldExists) {
+      try {
+        await fs.rename(oldRoot, newRoot);
+      } catch (error) {
+        // A concurrent process (e.g. the session-init hook alongside the MCP
+        // server) may have completed the migration between our existence
+        // check and the rename. Only surface the error if the new root is
+        // still missing.
+        const migrated = await fs.stat(newRoot).then(() => true).catch(() => false);
+        if (!migrated) throw error;
+      }
+    }
+
+    return newRoot;
   }
 
   private async getDb(vaultPath: string, workspacePath?: string | null, vaultId?: string | null) {
