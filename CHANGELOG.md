@@ -30,6 +30,18 @@ All notable changes to this project will be documented in this file.
   nothing) and `obsidian_rag_query` relevance output (hybrid search returns
   `_relevance_score`, which previously printed as `undefined`).
 
+### Dependencies
+
+- Migrated the embedding stack from the deprecated `@xenova/transformers` 2.x
+  to `@huggingface/transformers` 4.x. This unpins `onnxruntime-node` (1.14.0
+  from 2023 → current), drops the direct `sharp` dependency, removes the
+  runtime version-check guard, and clears all `npm audit` findings.
+- Existing RAG indexes remain loadable (same model, `Xenova/all-MiniLM-L6-v2`,
+  384 dimensions), but vectors produced by the new stack are not numerically
+  identical to old ones. A mixed index of old and new chunks degrades ranking
+  quality without any visible error. Run a one-time full rebuild after
+  upgrading: `obsidian_rag_index` with `force_reindex: true`.
+
 ## [1.8.2] - 2026-05-12
 
 ### Features

@@ -87,6 +87,7 @@ The first time you use a tool, the server can persist `vault_path`, `workspace_p
     - Otherwise, it defaults to a **Hashed Global Cache** in `~/.obsidian-vault-mcp/vaults/<vault_identifier>/`.
   - On first access, if `.gemini-obsidian` exists and `.obsidian-vault-mcp` does not, the server automatically migrates the old storage directory to the neutral name so existing indexes are preserved.
 - **Cache Reset**: If you suspect the index is corrupted or want a fresh start, you can manually delete the vault-specific folder (`.obsidian-vault-mcp/vaults/<vault_identifier>`) in your workspace or the corresponding entry in the global cache. The next time you run `obsidian_rag_index`, it will be recreated.
+- **Rebuild After Upgrading to 2.0.0**: version 2.0.0 replaced the embedding library (`@xenova/transformers` → `@huggingface/transformers`). Existing indexes still load — the model and its 384 dimensions are unchanged — but vectors embedded by the new stack are not numerically identical to old ones, so an index mixing pre- and post-upgrade chunks quietly degrades ranking quality. Run a one-time full rebuild after upgrading: `node dist/index.js obsidian_rag_index --force_reindex`.
 - **Module Not Found Error**: If you see an error like `Cannot find module '@lancedb/lancedb'`, run `npm install` in the repo or installed extension/plugin directory.
 - **Logs**: Since this runs as an MCP server, errors are typically output to stderr.
 

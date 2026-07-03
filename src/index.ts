@@ -29,24 +29,7 @@ const PROJECT_NAME = "obsidian-vault-mcp";
 function assertNativeDependencies() {
     try {
         require.resolve("@lancedb/lancedb");
-        const ortPackagePath = require.resolve("onnxruntime-node/package.json");
-        const ortVersion = require(ortPackagePath).version as string | undefined;
-        const isCompatibleOrt =
-            typeof ortVersion === "string" && /^1\.14(\.|$)/.test(ortVersion);
-        if (!isCompatibleOrt) {
-            console.error(
-                "\n[Obsidian MCP] Error: Incompatible onnxruntime-node version detected.",
-            );
-            console.error(`Installed: ${ortVersion ?? "unknown"}, required: 1.14.x`);
-            console.error(
-                "This project bundles @xenova/transformers 2.17.x, which requires onnxruntime-node 1.14.x.",
-            );
-            console.error("Please run:");
-            console.error(
-                `  cd ${require("path").join(__dirname, "..")} && npm install onnxruntime-node@1.14.0 --save-exact\n`,
-            );
-            process.exit(1);
-        }
+        require.resolve("@huggingface/transformers");
     } catch {
         console.error(
             "\n[Obsidian MCP] Error: Required native dependencies are missing.",
