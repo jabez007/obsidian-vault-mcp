@@ -20,6 +20,16 @@ jobs:
 
       - run: npm ci
 
+      - name: Verify generated host assets
+        run: |
+          npm run sync-assets
+          status="$(git status --short -- plugins/obsidian-vault-mcp)"
+          if [ -n "$status" ]; then
+            echo "$status"
+            echo "Generated host assets are out of date. Run npm run sync-assets and commit the result." >&2
+            exit 1
+          fi
+
       - run: npm run lint
 
       - run: npm run type-check

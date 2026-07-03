@@ -6,7 +6,7 @@
           {
             "name": "obsidian-session-init",
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${extensionPath}}}/scripts/session-init.sh\"",
+            "command": "bash -c 'set -euo pipefail; plugin_root=\"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${extensionPath:-}}}\"; if [ -n \"$plugin_root\" ]; then exec bash \"$plugin_root/scripts/session-init.sh\"; fi; if [ -f \"scripts/session-init.sh\" ]; then exec bash \"scripts/session-init.sh\"; fi; echo \"Obsidian session-init hook could not find the plugin root. Set CLAUDE_PLUGIN_ROOT, PLUGIN_ROOT, or extensionPath, or run the hook from the plugin root.\" >&2; exit 1'",
             "description": "Reports vault status and refreshes the RAG index when a session starts."
           }
         ]

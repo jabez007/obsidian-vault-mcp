@@ -24,11 +24,12 @@
   ],
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js --format=cjs --external:@lancedb/lancedb --external:@huggingface/transformers --banner:js=\"var import_meta = { url: 'file://' + __filename };\" --define:import.meta=import_meta",
+    "sync-assets": "node scripts/sync-assets.mjs",
     "lint": "eslint . --ext .ts",
     "type-check": "tsc --noEmit",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run sync-assets && npm run build && npm test"
   },
   "keywords": [
     "codex",

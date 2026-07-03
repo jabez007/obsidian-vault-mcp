@@ -1,7 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_SOURCE" ]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+  SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+  if [[ "$SCRIPT_SOURCE" != /* ]]; then
+    SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+  fi
+done
+
+SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+HOST_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${extensionPath:-}}}"
+
+if [ -n "$HOST_PLUGIN_ROOT" ]; then
+  PLUGIN_ROOT="$(cd "$HOST_PLUGIN_ROOT" && pwd)" || {
+    echo "Obsidian session-init hook could not use plugin root: $HOST_PLUGIN_ROOT" >&2
+    exit 1
+  }
+else
+  PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)" || {
+    echo "Obsidian session-init hook could not resolve its script directory." >&2
+    exit 1
+  }
+fi
+
+if [ ! -f "$PLUGIN_ROOT/scripts/session-init.sh" ]; then
+  echo "Obsidian session-init hook resolved plugin root to '$PLUGIN_ROOT', but scripts/session-init.sh was not found there." >&2
+  exit 1
+fi
+
 SERVER_COMMAND="${OBSIDIAN_MCP_SERVER_COMMAND:-npx -y @jabez007/obsidian-vault-mcp@2}"
 CONFIG_PRIMARY="$HOME/.obsidian-mcp.config.json"
 CONFIG_LEGACY="$HOME/.gemini-obsidian.config.json"

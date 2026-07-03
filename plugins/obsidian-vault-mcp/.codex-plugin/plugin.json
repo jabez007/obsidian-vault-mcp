@@ -1,7 +1,7 @@
 {
   "name": "obsidian-vault-mcp",
   "version": "2.0.0",
-  "description": "Obsidian vault MCP server with local RAG capabilities for Codex CLI.",
+  "description": "Obsidian vault MCP server with local RAG capabilities for Codex and compatible MCP hosts.",
   "author": {
     "name": "jabez007",
     "url": "https://github.com/jabez007"
@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "Obsidian Vault",
     "shortDescription": "Search, read, and maintain an Obsidian vault from Codex.",
-    "longDescription": "Adds Obsidian vault tools, local RAG retrieval, and note-management skills to Codex using the shared MCP server in this repository.",
+    "longDescription": "Adds Obsidian vault tools, local RAG retrieval, and note-management skills to Codex through a shared MCP server.",
     "developerName": "jabez007",
     "category": "Productivity",
     "capabilities": [

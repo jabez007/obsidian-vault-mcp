@@ -143,10 +143,20 @@ npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index
 
 ## Host-specific assets
 
-- **Codex** uses `.agents/plugins/marketplace.json` and the plugin wrapper under `plugins/obsidian-vault-mcp/`.
-- **Legacy Gemini CLI** continues to use `gemini-extension.json`, `commands/`, and `hooks/hooks.json`.
+- **Canonical shared assets** live at the repo root. Edit `skills/` for skills and `agents/` for local agents; do not edit generated host copies by hand.
+- **Codex package/checkouts** use `.codex-plugin/plugin.json`, `.mcp.json`, `skills/`, and `agents/` from the repo root.
+- **Codex repo marketplace installs** use `.agents/plugins/marketplace.json` and the plugin wrapper under `plugins/obsidian-vault-mcp/`. The wrapper's `.codex-plugin/`, `.mcp.json`, and `skills/` are generated from the root assets.
+- **Legacy Gemini CLI** continues to use `gemini-extension.json`, `commands/`, `hooks/hooks.json`, and the scripts in `scripts/`.
 - **Shared behavior**: both hosts launch the published MCP package through `npx`, and note-writing MCP tools re-index the changed note inside the server.
 - **Compatibility note**: the Codex wrapper intentionally does not bundle hooks yet. Gemini keeps `hooks/hooks.json`, while Codex relies on the in-server post-write reindex flow and avoids cross-host hook drift.
+
+After changing root skills, Codex plugin metadata, or `.mcp.json`, run:
+
+```sh
+npm run sync-assets
+```
+
+CI runs the same sync and fails if it changes `plugins/obsidian-vault-mcp/`, so host asset drift cannot merge silently.
 
 ## Versioning
 
