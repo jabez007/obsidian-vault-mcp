@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "name": "obsidian-session-init",
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/session-init.sh\"",
+            "description": "Reports vault status and refreshes the RAG index when a session starts."
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -22,6 +22,51 @@ const generatedAssets = [
     target: 'plugins/obsidian-vault-mcp/skills',
     type: 'directory',
   },
+  {
+    source: '.claude-plugin/plugin.json',
+    target: 'plugins/claude-obsidian-vault-mcp/.claude-plugin/plugin.json',
+    type: 'file',
+  },
+  {
+    source: '.claude-plugin/mcp.json',
+    target: 'plugins/claude-obsidian-vault-mcp/.mcp.json',
+    type: 'file',
+  },
+  {
+    source: '.claude-plugin/hooks.json',
+    target: 'plugins/claude-obsidian-vault-mcp/hooks/hooks.json',
+    type: 'file',
+  },
+  {
+    source: 'skills',
+    target: 'plugins/claude-obsidian-vault-mcp/skills',
+    type: 'directory',
+  },
+  {
+    source: 'scripts/session-init.sh',
+    target: 'plugins/claude-obsidian-vault-mcp/scripts/session-init.sh',
+    type: 'file',
+  },
+  {
+    source: 'scripts/claude-mcp-server.sh',
+    target: 'plugins/claude-obsidian-vault-mcp/scripts/claude-mcp-server.sh',
+    type: 'file',
+  },
+  {
+    source: 'package.json',
+    target: 'plugins/claude-obsidian-vault-mcp/package.json',
+    type: 'file',
+  },
+  {
+    source: 'package-lock.json',
+    target: 'plugins/claude-obsidian-vault-mcp/package-lock.json',
+    type: 'file',
+  },
+  {
+    source: 'dist/index.js',
+    target: 'plugins/claude-obsidian-vault-mcp/dist/index.js',
+    type: 'file',
+  },
 ];
 
 async function ensureSource(relativePath, type) {

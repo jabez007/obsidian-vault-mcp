@@ -23,7 +23,7 @@ jobs:
       - name: Verify generated host assets
         run: |
           npm run sync-assets
-          status="$(git status --short -- plugins/obsidian-vault-mcp)"
+          status="$(git status --short -- plugins)"
           if [ -n "$status" ]; then
             echo "$status"
             echo "Generated host assets are out of date. Run npm run sync-assets and commit the result." >&2

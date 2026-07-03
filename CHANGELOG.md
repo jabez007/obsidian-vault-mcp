@@ -16,6 +16,13 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Claude Code support: the repo is now a Claude Code plugin marketplace
+  (`.claude-plugin/marketplace.json`). The plugin bundles the built server
+  and installs its runtime dependencies from the pinned lockfile on first
+  launch, and a SessionStart hook reports vault status and refreshes the
+  RAG index.
+- OpenCode support: an `opencode.json` config launches the server from a
+  local checkout.
 - The package is published to npm as `@jabez007/obsidian-vault-mcp`. Host
   manifests now launch it via `npx -y @jabez007/obsidian-vault-mcp@2`
   (pinned to the current major) instead of a repo-relative build, so
