@@ -3,9 +3,16 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 
 const repoRoot = path.resolve(__dirname, '..');
+const MCP_SERVER_NAME = 'obsidian-vault-mcp';
 
 async function readJson(relativePath: string) {
   return JSON.parse(await fs.readFile(path.join(repoRoot, relativePath), 'utf-8'));
+}
+
+function expectNpxLaunch(manifest: any, packageName: string, majorVersion: string) {
+  const server = manifest.mcpServers[MCP_SERVER_NAME];
+  expect(server.command).toBe('npx');
+  expect(server.args).toEqual(['-y', `${packageName}@${majorVersion}`]);
 }
 
 describe('project metadata', () => {
@@ -26,9 +33,21 @@ describe('project metadata', () => {
     const rootMcp = await readJson('.mcp.json');
     const bundledMcp = await readJson('plugins/obsidian-vault-mcp/.mcp.json');
 
-    expect(packageJson.name).toBe('obsidian-vault-mcp');
-    expect(geminiExtension.name).toBe(packageJson.name);
-    expect(Object.keys(rootMcp.mcpServers)).toEqual([packageJson.name]);
-    expect(Object.keys(bundledMcp.mcpServers)).toEqual([packageJson.name]);
+    expect(packageJson.name).toBe('@jabez007/obsidian-vault-mcp');
+    expect(geminiExtension.name).toBe(MCP_SERVER_NAME);
+    expect(Object.keys(rootMcp.mcpServers)).toEqual([MCP_SERVER_NAME]);
+    expect(Object.keys(bundledMcp.mcpServers)).toEqual([MCP_SERVER_NAME]);
+  });
+
+  it('launches the published npm package pinned to the current major version', async () => {
+    const packageJson = await readJson('package.json');
+    const geminiExtension = await readJson('gemini-extension.json');
+    const rootMcp = await readJson('.mcp.json');
+    const bundledMcp = await readJson('plugins/obsidian-vault-mcp/.mcp.json');
+    const majorVersion = String(packageJson.version).split('.')[0];
+
+    expectNpxLaunch(geminiExtension, packageJson.name, majorVersion);
+    expectNpxLaunch(rootMcp, packageJson.name, majorVersion);
+    expectNpxLaunch(bundledMcp, packageJson.name, majorVersion);
   });
 });

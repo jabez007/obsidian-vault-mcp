@@ -16,6 +16,11 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- The package is published to npm as `@jabez007/obsidian-vault-mcp`. Host
+  manifests now launch it via `npx -y @jabez007/obsidian-vault-mcp@2`
+  (pinned to the current major) instead of a repo-relative build, so
+  installed extensions and plugins no longer require an in-place
+  `npm install && npm run build`.
 - Storage roots migrate automatically: on first access, an existing
   `.gemini-obsidian/` storage directory (global or workspace) is renamed to
   `.obsidian-vault-mcp/`, preserving indexes and file hashes.

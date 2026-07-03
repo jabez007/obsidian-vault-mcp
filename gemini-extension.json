@@ -5,9 +5,10 @@
   "instructions": "Use these tools to manage and retrieve information from the user's personal knowledge base, notes, and documentation. You can read, search, and synthesize answers based on the user's own records using RAG. Always assume the user's 'notes' or 'thoughts' refer to this vault. If a vault path is unknown, ask the user to provide it or set the OBSIDIAN_VAULT_PATH environment variable.",
   "mcpServers": {
     "obsidian-vault-mcp": {
-      "command": "node",
+      "command": "npx",
       "args": [
-        "${extensionPath}/dist/index.js"
+        "-y",
+        "@jabez007/obsidian-vault-mcp@2"
       ]
     }
   }

@@ -1,9 +1,10 @@
 {
   "mcpServers": {
     "obsidian-vault-mcp": {
-      "command": "node",
+      "command": "npx",
       "args": [
-        "./dist/index.js"
+        "-y",
+        "@jabez007/obsidian-vault-mcp@2"
       ]
     }
   }

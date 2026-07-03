@@ -2,6 +2,7 @@
 set -euo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
+SERVER_COMMAND="${OBSIDIAN_MCP_SERVER_COMMAND:-npx -y @jabez007/obsidian-vault-mcp@2}"
 CONFIG_PRIMARY="$HOME/.obsidian-mcp.config.json"
 CONFIG_LEGACY="$HOME/.gemini-obsidian.config.json"
 VAULT_PATH="${OBSIDIAN_VAULT_PATH:-${CODEX_OBSIDIAN_VAULT_PATH:-${GEMINI_OBSIDIAN_VAULT_PATH:-}}}"
@@ -22,7 +23,7 @@ if [ -n "$VAULT_PATH" ] && [ -d "$VAULT_PATH" ]; then
   note_count=$(find "$VAULT_PATH" -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' ')
   status_line="Obsidian vault connected: $VAULT_PATH ($note_count notes)"
 
-  if index_output=$(node "$PLUGIN_ROOT/dist/index.js" obsidian_rag_index 2>/dev/null); then
+  if index_output=$(eval "$SERVER_COMMAND obsidian_rag_index" 2>/dev/null); then
     if printf '%s' "$index_output" | grep -q '"chunks":0'; then
       index_line="RAG index up to date"
     elif printf '%s' "$index_output" | grep -q '"chunks"'; then

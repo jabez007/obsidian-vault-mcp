@@ -1,14 +1,34 @@
 {
-  "name": "obsidian-vault-mcp",
+  "name": "@jabez007/obsidian-vault-mcp",
   "version": "2.0.0",
   "description": "Obsidian vault MCP server with local RAG capabilities for Codex and compatible MCP hosts",
   "main": "dist/index.js",
+  "bin": {
+    "obsidian-vault-mcp": "dist/index.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist/",
+    "skills/",
+    "commands/",
+    "hooks/",
+    "scripts/",
+    "agents/",
+    ".agents/",
+    ".mcp.json",
+    ".codex-plugin/",
+    "gemini-extension.json",
+    "plugins/obsidian-vault-mcp/"
+  ],
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js --format=cjs --external:@lancedb/lancedb --external:@huggingface/transformers --banner:js=\"var import_meta = { url: 'file://' + __filename };\" --define:import.meta=import_meta",
     "lint": "eslint . --ext .ts",
     "type-check": "tsc --noEmit",
     "start": "node dist/index.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run build && npm test"
   },
   "keywords": [
     "codex",
@@ -25,7 +45,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jabez007/obsidian-vault-mcp.git"
+    "url": "git+https://github.com/jabez007/obsidian-vault-mcp.git"
   },
   "homepage": "https://github.com/jabez007/obsidian-vault-mcp",
   "bugs": {

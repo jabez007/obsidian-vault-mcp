@@ -34,13 +34,12 @@ function assertNativeDependencies() {
         console.error(
             "\n[Obsidian MCP] Error: Required native dependencies are missing.",
         );
-        console.error('This usually happens if "npm install" was not run or failed.');
+        console.error('This usually means the published package install did not complete.');
         console.error(
-            "Please run the following command in the project/plugin directory:",
+            "Launch the server through npm so dependencies are installed automatically:",
         );
-        console.error(
-            `  cd ${require("path").join(__dirname, "..")} && npm install\n`,
-        );
+        console.error("  npx -y @jabez007/obsidian-vault-mcp@2\n");
+        console.error("For local development, run: npm install && npm run build\n");
         process.exit(1);
     }
 }

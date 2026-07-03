@@ -23,14 +23,24 @@ This project integrates your **Obsidian Vault** into Codex and other MCP-capable
 
 ## Installation
 
+### MCP host configuration
+
+Published installs launch through npm, so hosts do not need a cloned checkout:
+
+```json
+{
+  "mcpServers": {
+    "obsidian-vault-mcp": {
+      "command": "npx",
+      "args": ["-y", "@jabez007/obsidian-vault-mcp@2"]
+    }
+  }
+}
+```
+
 ### Codex plugin
 
-This repo includes a repo-scoped Codex marketplace at `.agents/plugins/marketplace.json` and a dedicated plugin wrapper at `plugins/obsidian-vault-mcp/`. The Codex plugin launches the shared MCP server from `dist/index.js`, so the server implementation stays shared with other host manifests.
-
-```sh
-npm install
-npm run build
-```
+This repo includes a repo-scoped Codex marketplace at `.agents/plugins/marketplace.json` and a dedicated plugin wrapper at `plugins/obsidian-vault-mcp/`. The Codex plugin launches the published MCP server with `npx -y @jabez007/obsidian-vault-mcp@2`, so copied plugin directories do not depend on repository-relative build paths.
 
 Then open Codex in this repository, restart if it was already running, and install the plugin from the repo marketplace:
 
@@ -52,7 +62,24 @@ Gemini compatibility remains in place through `gemini-extension.json`:
 
 ```sh
 gemini extensions install https://github.com/jabez007/obsidian-vault-mcp
-cd ~/.gemini/extensions/obsidian-vault-mcp && npm install && npm run build
+```
+
+The extension manifest launches the published package through `npx`, so no in-extension install step is required.
+
+### Local development
+
+For local development, build the server in this checkout and run it directly:
+
+```sh
+npm install
+npm run build
+node dist/index.js
+```
+
+The packaged manifests use `npx`. Hook scripts can be pointed at a local build with:
+
+```sh
+export OBSIDIAN_MCP_SERVER_COMMAND="node /absolute/path/to/obsidian-vault-mcp/dist/index.js"
 ```
 
 ## Configuration
@@ -87,16 +114,16 @@ The first time you use a tool, the server can persist `vault_path`, `workspace_p
     - Otherwise, it defaults to a **Hashed Global Cache** in `~/.obsidian-vault-mcp/vaults/<vault_identifier>/`.
   - On first access, if `.gemini-obsidian` exists and `.obsidian-vault-mcp` does not, the server automatically migrates the old storage directory to the neutral name so existing indexes are preserved.
 - **Cache Reset**: If you suspect the index is corrupted or want a fresh start, you can manually delete the vault-specific folder (`.obsidian-vault-mcp/vaults/<vault_identifier>`) in your workspace or the corresponding entry in the global cache. The next time you run `obsidian_rag_index`, it will be recreated.
-- **Rebuild After Upgrading to 2.0.0**: version 2.0.0 replaced the embedding library (`@xenova/transformers` → `@huggingface/transformers`). Existing indexes still load — the model and its 384 dimensions are unchanged — but vectors embedded by the new stack are not numerically identical to old ones, so an index mixing pre- and post-upgrade chunks quietly degrades ranking quality. Run a one-time full rebuild after upgrading: `node dist/index.js obsidian_rag_index --force_reindex`.
-- **Module Not Found Error**: If you see an error like `Cannot find module '@lancedb/lancedb'`, run `npm install` in the repo or installed extension/plugin directory.
+- **Rebuild After Upgrading to 2.0.0**: version 2.0.0 replaced the embedding library (`@xenova/transformers` → `@huggingface/transformers`). Existing indexes still load — the model and its 384 dimensions are unchanged — but vectors embedded by the new stack are not numerically identical to old ones, so an index mixing pre- and post-upgrade chunks quietly degrades ranking quality. Run a one-time full rebuild after upgrading: `npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index --force_reindex`.
+- **Module Not Found Error**: If you see an error like `Cannot find module '@lancedb/lancedb'`, launch through `npx -y @jabez007/obsidian-vault-mcp@2` so npm installs runtime dependencies automatically. For local development, run `npm install && npm run build`.
 - **Logs**: Since this runs as an MCP server, errors are typically output to stderr.
 
 ## Indexing Performance Tuning
 
 > [!WARNING]
 > Initial semantic indexing can be time- and resource-intensive, especially on large vaults.
-> For first-time indexing on larger vaults, prefer running indexing directly from the project directory:
-> `node dist/index.js obsidian_rag_index`
+> For first-time indexing on larger vaults, prefer running indexing directly:
+> `npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index`
 
 For large vaults, you can tune indexing throughput and chunk size with environment variables. Neutral names are preferred, but the Gemini-prefixed names still work:
 
@@ -111,14 +138,14 @@ Example preset for very large vaults:
 OBSIDIAN_EMBED_BATCH_SIZE=48 \
 OBSIDIAN_TARGET_CHUNK_CHARS=900 \
 OBSIDIAN_MIN_CHUNK_CHARS=60 \
-node dist/index.js obsidian_rag_index
+npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index
 ```
 
 ## Host-specific assets
 
 - **Codex** uses `.agents/plugins/marketplace.json` and the plugin wrapper under `plugins/obsidian-vault-mcp/`.
 - **Legacy Gemini CLI** continues to use `gemini-extension.json`, `commands/`, and `hooks/hooks.json`.
-- **Shared behavior**: both hosts use the same MCP server build from `dist/index.js`, and note-writing MCP tools re-index the changed note inside the server.
+- **Shared behavior**: both hosts launch the published MCP package through `npx`, and note-writing MCP tools re-index the changed note inside the server.
 - **Compatibility note**: the Codex wrapper intentionally does not bundle hooks yet. Gemini keeps `hooks/hooks.json`, while Codex relies on the in-server post-write reindex flow and avoids cross-host hook drift.
 
 ## Versioning
