@@ -530,6 +530,11 @@ export const obsidianTools: ObsidianTool[] = [
                     type: "string",
                     description: "Optional unique identifier for the vault",
                 },
+                overwrite: {
+                    type: "boolean",
+                    description:
+                        "Overwrite the destination note if it already exists (default: false)",
+                },
             },
             required: ["source_path", "dest_path"],
         },
@@ -541,6 +546,18 @@ export const obsidianTools: ObsidianTool[] = [
             const destRelativePath = String(args.dest_path);
             const source = getSafeFilePath(vaultPath, sourceRelativePath);
             const dest = getSafeFilePath(vaultPath, destRelativePath);
+            const overwrite = booleanArg(args.overwrite);
+
+            if (!overwrite) {
+                try {
+                    await fs.stat(dest);
+                    throw new Error(
+                        `Destination note already exists: ${destRelativePath}. Set overwrite=true to replace it.`,
+                    );
+                } catch (error: any) {
+                    if (error?.code !== "ENOENT") throw error;
+                }
+            }
 
             await fs.mkdir(path.dirname(dest), { recursive: true });
             await fs.rename(source, dest);

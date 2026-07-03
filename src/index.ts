@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import * as nodeFs from "fs";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
@@ -54,6 +55,87 @@ function getFirstEnv(...keys: string[]): string | null {
     return null;
 }
 
+function parseAllowedVaultRoots(): string[] | null {
+    const raw = getFirstEnv(
+        "OBSIDIAN_ALLOWED_VAULTS",
+        "CODEX_OBSIDIAN_ALLOWED_VAULTS",
+        "GEMINI_OBSIDIAN_ALLOWED_VAULTS",
+    );
+    if (!raw) return null;
+    return raw
+        .split(path.delimiter)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+}
+
+function resolveRealPathAllowMissing(candidatePath: string): string {
+    if (!path.isAbsolute(candidatePath)) {
+        throw new Error(`Path must be absolute: ${candidatePath}`);
+    }
+
+    const resolvedPath = path.resolve(candidatePath);
+    let existingPath = resolvedPath;
+    const missingParts: string[] = [];
+
+    while (!nodeFs.existsSync(existingPath)) {
+        const parent = path.dirname(existingPath);
+        if (parent === existingPath) break;
+        missingParts.unshift(path.basename(existingPath));
+        existingPath = parent;
+    }
+
+    const realExistingPath = nodeFs.realpathSync.native(existingPath);
+    return missingParts.length > 0
+        ? path.join(realExistingPath, ...missingParts)
+        : realExistingPath;
+}
+
+function isPathContainedByRoot(candidatePath: string, rootPath: string): boolean {
+    const relativePath = path.relative(rootPath, candidatePath);
+    return (
+        relativePath === "" ||
+        (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
+    );
+}
+
+function boundaryViolation(
+    pathKind: "vault_path" | "workspace_path",
+    candidatePath: string,
+): Error {
+    return new Error(
+        `Security Error: ${pathKind} is outside the allowed vault boundary: ${candidatePath}. ` +
+        "Set OBSIDIAN_ALLOWED_VAULTS to permit additional roots.",
+    );
+}
+
+function assertPathAllowed(
+    candidatePath: string,
+    allowedRoots: string[],
+    pathKind: "vault_path" | "workspace_path",
+) {
+    const realCandidatePath = resolveRealPathAllowMissing(candidatePath);
+    const realAllowedRoots = allowedRoots.map(resolveRealPathAllowMissing);
+    if (
+        !realAllowedRoots.some((rootPath) =>
+            isPathContainedByRoot(realCandidatePath, rootPath),
+        )
+    ) {
+        throw boundaryViolation(pathKind, candidatePath);
+    }
+}
+
+function assertPathMatches(
+    candidatePath: string,
+    allowedPath: string,
+    pathKind: "vault_path" | "workspace_path",
+) {
+    const realCandidatePath = resolveRealPathAllowMissing(candidatePath);
+    const realAllowedPath = resolveRealPathAllowMissing(allowedPath);
+    if (realCandidatePath !== realAllowedPath) {
+        throw boundaryViolation(pathKind, candidatePath);
+    }
+}
+
 async function saveConfig(options: SetConfigOptions) {
     try {
         const serialized = JSON.stringify({
@@ -106,11 +188,35 @@ async function loadPackageMetadata(): Promise<{ name: string; version: string }>
     }
 }
 
-function createToolContext(
+export function createToolContext(
     indexer: VaultIndexerLike,
     initialConfig: ToolConfig,
+    contextOptions: { saveConfig?: (options: SetConfigOptions) => Promise<void> } = {},
 ): ToolContext {
     const config: ToolConfig = { ...initialConfig };
+    const envAllowedRoots = parseAllowedVaultRoots();
+
+    function assertVaultPathAllowed(vaultPath: string) {
+        if (envAllowedRoots) {
+            assertPathAllowed(vaultPath, envAllowedRoots, "vault_path");
+            return;
+        }
+        if (!config.vault_path) return;
+        assertPathMatches(vaultPath, config.vault_path, "vault_path");
+    }
+
+    function assertWorkspacePathAllowed(workspacePath: string | null) {
+        if (!workspacePath) return;
+        if (envAllowedRoots) {
+            assertPathAllowed(workspacePath, envAllowedRoots, "workspace_path");
+            return;
+        }
+        if (!config.vault_path && !config.workspace_path) return;
+        if (!config.workspace_path) {
+            throw boundaryViolation("workspace_path", workspacePath);
+        }
+        assertPathMatches(workspacePath, config.workspace_path, "workspace_path");
+    }
 
     return {
         indexer,
@@ -124,12 +230,15 @@ function createToolContext(
                     "Vault path is not set. Use obsidian_set_vault or provide 'vault_path' argument.",
                 );
             }
+            assertVaultPathAllowed(vaultPath);
             return vaultPath;
         },
         getWorkspacePath(providedPath?: unknown) {
-            return typeof providedPath === "string" && providedPath.length > 0
+            const workspacePath = typeof providedPath === "string" && providedPath.length > 0
                 ? providedPath
                 : config.workspace_path;
+            assertWorkspacePathAllowed(workspacePath);
+            return workspacePath;
         },
         getVaultId(providedId?: unknown) {
             return typeof providedId === "string" && providedId.length > 0
@@ -140,11 +249,13 @@ function createToolContext(
             return { ...config };
         },
         async setConfig(options: SetConfigOptions) {
+            assertVaultPathAllowed(options.vaultPath);
+            assertWorkspacePathAllowed(options.workspacePath ?? null);
             config.vault_path = options.vaultPath;
             config.workspace_path = options.workspacePath ?? null;
             config.vault_id = options.vaultId ?? null;
             await indexer.reset();
-            await saveConfig(options);
+            await (contextOptions.saveConfig ?? saveConfig)(options);
         },
     };
 }

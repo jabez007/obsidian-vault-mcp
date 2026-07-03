@@ -7355,8 +7355,8 @@ var require_excerpt = __commonJS({
       if (sep2 == null && (opts.excerpt === false || opts.excerpt == null)) {
         return file2;
       }
-      const delimiter = typeof opts.excerpt === "string" ? opts.excerpt : sep2 || opts.delimiters[0];
-      const idx = file2.content.indexOf(delimiter);
+      const delimiter2 = typeof opts.excerpt === "string" ? opts.excerpt : sep2 || opts.delimiters[0];
+      const idx = file2.content.indexOf(delimiter2);
       if (idx !== -1) {
         file2.excerpt = file2.content.slice(0, idx);
       }
@@ -15595,8 +15595,8 @@ var init_regexes = __esm({
     _emoji = `^(\\p{Extended_Pictographic}|\\p{Emoji_Component})+$`;
     ipv4 = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
     ipv6 = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))$/;
-    mac = (delimiter) => {
-      const escapedDelim = escapeRegex(delimiter ?? ":");
+    mac = (delimiter2) => {
+      const escapedDelim = escapeRegex(delimiter2 ?? ":");
       return new RegExp(`^(?:[0-9A-F]{2}${escapedDelim}){5}[0-9A-F]{2}$|^(?:[0-9a-f]{2}${escapedDelim}){5}[0-9a-f]{2}$`);
     };
     cidrv4 = /^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\/([0-9]|[1-2][0-9]|3[0-2])$/;
@@ -24729,7 +24729,7 @@ var init_protocol = __esm({
               return;
             }
             const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-            await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
+            await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
             options2?.signal?.throwIfAborted();
           }
         } catch (error2) {
@@ -24746,7 +24746,7 @@ var init_protocol = __esm({
        */
       request(request, resultSchema, options2) {
         const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options2 ?? {};
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve4, reject) => {
           const earlyReject = (error2) => {
             reject(error2);
           };
@@ -24824,7 +24824,7 @@ var init_protocol = __esm({
               if (!parseResult.success) {
                 reject(parseResult.error);
               } else {
-                resolve3(parseResult.data);
+                resolve4(parseResult.data);
               }
             } catch (error2) {
               reject(error2);
@@ -25085,12 +25085,12 @@ var init_protocol = __esm({
           }
         } catch {
         }
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve4, reject) => {
           if (signal.aborted) {
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
             return;
           }
-          const timeoutId = setTimeout(resolve3, interval);
+          const timeoutId = setTimeout(resolve4, interval);
           signal.addEventListener("abort", () => {
             clearTimeout(timeoutId);
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -28117,7 +28117,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve3.call(this, root, ref);
+      let _sch = resolve4.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a2 = root.localRefs) === null || _a2 === void 0 ? void 0 : _a2[ref];
         const { schemaId } = this.opts;
@@ -28144,7 +28144,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve3(root, ref) {
+    function resolve4(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -28775,55 +28775,55 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve3(baseURI, relativeURI, options2) {
+    function resolve4(baseURI, relativeURI, options2) {
       const schemelessOptions = options2 ? Object.assign({ scheme: "null" }, options2) : { scheme: "null" };
       const resolved = resolveComponent(parse4(baseURI, schemelessOptions), parse4(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
       return serialize(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative3, options2, skipNormalization) {
+    function resolveComponent(base, relative4, options2, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse4(serialize(base, options2), options2);
-        relative3 = parse4(serialize(relative3, options2), options2);
+        relative4 = parse4(serialize(relative4, options2), options2);
       }
       options2 = options2 || {};
-      if (!options2.tolerant && relative3.scheme) {
-        target.scheme = relative3.scheme;
-        target.userinfo = relative3.userinfo;
-        target.host = relative3.host;
-        target.port = relative3.port;
-        target.path = removeDotSegments(relative3.path || "");
-        target.query = relative3.query;
+      if (!options2.tolerant && relative4.scheme) {
+        target.scheme = relative4.scheme;
+        target.userinfo = relative4.userinfo;
+        target.host = relative4.host;
+        target.port = relative4.port;
+        target.path = removeDotSegments(relative4.path || "");
+        target.query = relative4.query;
       } else {
-        if (relative3.userinfo !== void 0 || relative3.host !== void 0 || relative3.port !== void 0) {
-          target.userinfo = relative3.userinfo;
-          target.host = relative3.host;
-          target.port = relative3.port;
-          target.path = removeDotSegments(relative3.path || "");
-          target.query = relative3.query;
+        if (relative4.userinfo !== void 0 || relative4.host !== void 0 || relative4.port !== void 0) {
+          target.userinfo = relative4.userinfo;
+          target.host = relative4.host;
+          target.port = relative4.port;
+          target.path = removeDotSegments(relative4.path || "");
+          target.query = relative4.query;
         } else {
-          if (!relative3.path) {
+          if (!relative4.path) {
             target.path = base.path;
-            if (relative3.query !== void 0) {
-              target.query = relative3.query;
+            if (relative4.query !== void 0) {
+              target.query = relative4.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative3.path[0] === "/") {
-              target.path = removeDotSegments(relative3.path);
+            if (relative4.path[0] === "/") {
+              target.path = removeDotSegments(relative4.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative3.path;
+                target.path = "/" + relative4.path;
               } else if (!base.path) {
-                target.path = relative3.path;
+                target.path = relative4.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative3.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative4.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative3.query;
+            target.query = relative4.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -28831,7 +28831,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative3.fragment;
+      target.fragment = relative4.fragment;
       return target;
     }
     function equal(uriA, uriB, options2) {
@@ -29033,7 +29033,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve3,
+      resolve: resolve4,
       resolveComponent,
       equal,
       serialize,
@@ -32841,12 +32841,12 @@ var init_stdio2 = __esm({
         this.onclose?.();
       }
       send(message) {
-        return new Promise((resolve3) => {
+        return new Promise((resolve4) => {
           const json2 = serializeMessage(message);
           if (this._stdout.write(json2)) {
-            resolve3();
+            resolve4();
           } else {
-            this._stdout.once("drain", resolve3);
+            this._stdout.once("drain", resolve4);
           }
         });
       }
@@ -33330,8 +33330,8 @@ var init_store = __esm({
       }
       async acquireLock() {
         let release;
-        const nextLock = new Promise((resolve3) => {
-          release = resolve3;
+        const nextLock = new Promise((resolve4) => {
+          release = resolve4;
         });
         const wait = this.lock;
         this.lock = nextLock;
@@ -33893,10 +33893,12 @@ var init_store = __esm({
 // src/index.ts
 var index_exports = {};
 __export(index_exports, {
+  createToolContext: () => createToolContext,
   getDailyNoteConfig: () => getDailyNoteConfig,
   main: () => main
 });
 module.exports = __toCommonJS(index_exports);
+var nodeFs = __toESM(require("fs"));
 var fs5 = __toESM(require("fs/promises"));
 var path5 = __toESM(require("path"));
 var os3 = __toESM(require("os"));
@@ -34418,6 +34420,10 @@ Content: ${result.text}
         vault_id: {
           type: "string",
           description: "Optional unique identifier for the vault"
+        },
+        overwrite: {
+          type: "boolean",
+          description: "Overwrite the destination note if it already exists (default: false)"
         }
       },
       required: ["source_path", "dest_path"]
@@ -34430,6 +34436,17 @@ Content: ${result.text}
       const destRelativePath = String(args.dest_path);
       const source = getSafeFilePath(vaultPath, sourceRelativePath);
       const dest = getSafeFilePath(vaultPath, destRelativePath);
+      const overwrite = booleanArg(args.overwrite);
+      if (!overwrite) {
+        try {
+          await fs3.stat(dest);
+          throw new Error(
+            `Destination note already exists: ${destRelativePath}. Set overwrite=true to replace it.`
+          );
+        } catch (error2) {
+          if (error2?.code !== "ENOENT") throw error2;
+        }
+      }
       await fs3.mkdir(path3.dirname(dest), { recursive: true });
       await fs3.rename(source, dest);
       await reindexMovedNote(
@@ -34890,6 +34907,56 @@ function getFirstEnv(...keys) {
   }
   return null;
 }
+function parseAllowedVaultRoots() {
+  const raw = getFirstEnv(
+    "OBSIDIAN_ALLOWED_VAULTS",
+    "CODEX_OBSIDIAN_ALLOWED_VAULTS",
+    "GEMINI_OBSIDIAN_ALLOWED_VAULTS"
+  );
+  if (!raw) return null;
+  return raw.split(path5.delimiter).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+}
+function resolveRealPathAllowMissing(candidatePath) {
+  if (!path5.isAbsolute(candidatePath)) {
+    throw new Error(`Path must be absolute: ${candidatePath}`);
+  }
+  const resolvedPath = path5.resolve(candidatePath);
+  let existingPath = resolvedPath;
+  const missingParts = [];
+  while (!nodeFs.existsSync(existingPath)) {
+    const parent = path5.dirname(existingPath);
+    if (parent === existingPath) break;
+    missingParts.unshift(path5.basename(existingPath));
+    existingPath = parent;
+  }
+  const realExistingPath = nodeFs.realpathSync.native(existingPath);
+  return missingParts.length > 0 ? path5.join(realExistingPath, ...missingParts) : realExistingPath;
+}
+function isPathContainedByRoot(candidatePath, rootPath) {
+  const relativePath = path5.relative(rootPath, candidatePath);
+  return relativePath === "" || !relativePath.startsWith("..") && !path5.isAbsolute(relativePath);
+}
+function boundaryViolation(pathKind, candidatePath) {
+  return new Error(
+    `Security Error: ${pathKind} is outside the allowed vault boundary: ${candidatePath}. Set OBSIDIAN_ALLOWED_VAULTS to permit additional roots.`
+  );
+}
+function assertPathAllowed(candidatePath, allowedRoots, pathKind) {
+  const realCandidatePath = resolveRealPathAllowMissing(candidatePath);
+  const realAllowedRoots = allowedRoots.map(resolveRealPathAllowMissing);
+  if (!realAllowedRoots.some(
+    (rootPath) => isPathContainedByRoot(realCandidatePath, rootPath)
+  )) {
+    throw boundaryViolation(pathKind, candidatePath);
+  }
+}
+function assertPathMatches(candidatePath, allowedPath, pathKind) {
+  const realCandidatePath = resolveRealPathAllowMissing(candidatePath);
+  const realAllowedPath = resolveRealPathAllowMissing(allowedPath);
+  if (realCandidatePath !== realAllowedPath) {
+    throw boundaryViolation(pathKind, candidatePath);
+  }
+}
 async function saveConfig(options2) {
   try {
     const serialized = JSON.stringify({
@@ -34939,8 +35006,29 @@ async function loadPackageMetadata() {
     return { name: PROJECT_NAME, version: "0.0.0" };
   }
 }
-function createToolContext(indexer, initialConfig) {
+function createToolContext(indexer, initialConfig, contextOptions = {}) {
   const config2 = { ...initialConfig };
+  const envAllowedRoots = parseAllowedVaultRoots();
+  function assertVaultPathAllowed(vaultPath) {
+    if (envAllowedRoots) {
+      assertPathAllowed(vaultPath, envAllowedRoots, "vault_path");
+      return;
+    }
+    if (!config2.vault_path) return;
+    assertPathMatches(vaultPath, config2.vault_path, "vault_path");
+  }
+  function assertWorkspacePathAllowed(workspacePath) {
+    if (!workspacePath) return;
+    if (envAllowedRoots) {
+      assertPathAllowed(workspacePath, envAllowedRoots, "workspace_path");
+      return;
+    }
+    if (!config2.vault_path && !config2.workspace_path) return;
+    if (!config2.workspace_path) {
+      throw boundaryViolation("workspace_path", workspacePath);
+    }
+    assertPathMatches(workspacePath, config2.workspace_path, "workspace_path");
+  }
   return {
     indexer,
     getVaultPath(providedPath) {
@@ -34950,10 +35038,13 @@ function createToolContext(indexer, initialConfig) {
           "Vault path is not set. Use obsidian_set_vault or provide 'vault_path' argument."
         );
       }
+      assertVaultPathAllowed(vaultPath);
       return vaultPath;
     },
     getWorkspacePath(providedPath) {
-      return typeof providedPath === "string" && providedPath.length > 0 ? providedPath : config2.workspace_path;
+      const workspacePath = typeof providedPath === "string" && providedPath.length > 0 ? providedPath : config2.workspace_path;
+      assertWorkspacePathAllowed(workspacePath);
+      return workspacePath;
     },
     getVaultId(providedId) {
       return typeof providedId === "string" && providedId.length > 0 ? providedId : config2.vault_id;
@@ -34962,30 +35053,32 @@ function createToolContext(indexer, initialConfig) {
       return { ...config2 };
     },
     async setConfig(options2) {
+      assertVaultPathAllowed(options2.vaultPath);
+      assertWorkspacePathAllowed(options2.workspacePath ?? null);
       config2.vault_path = options2.vaultPath;
       config2.workspace_path = options2.workspacePath ?? null;
       config2.vault_id = options2.vaultId ?? null;
       await indexer.reset();
-      await saveConfig(options2);
+      await (contextOptions.saveConfig ?? saveConfig)(options2);
     }
   };
 }
 async function readStdin() {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     let data = "";
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => {
       data += chunk;
     });
     process.stdin.on("end", () => {
-      resolve3(data);
+      resolve4(data);
     });
     process.stdin.on("error", (error2) => {
       reject(error2);
     });
     setTimeout(() => {
       if (data === "") {
-        resolve3("");
+        resolve4("");
       }
     }, 1e3);
   });
@@ -35083,6 +35176,7 @@ if (require.main === module) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  createToolContext,
   getDailyNoteConfig,
   main
 });

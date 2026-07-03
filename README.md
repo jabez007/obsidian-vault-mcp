@@ -143,9 +143,25 @@ export OBSIDIAN_VAULT_PATH="/Users/you/Documents/MyVault"
 # Optional: neutral, Codex, and legacy Gemini names are all accepted
 export OBSIDIAN_WORKSPACE_PATH="/Users/you/Documents/MyProject"
 export OBSIDIAN_VAULT_ID="my-personal-knowledge-base"
+# Optional: colon-separated absolute roots allowed for vault_path and workspace_path overrides
+export OBSIDIAN_ALLOWED_VAULTS="/Users/you/Documents/MyVault:/Users/you/Documents/MyProject"
 ```
 
 Also supported for backward compatibility: `CODEX_OBSIDIAN_*` and `GEMINI_OBSIDIAN_*`.
+
+### Vault boundary
+
+Tools accept per-call `vault_path` and `workspace_path` overrides, which is useful
+for explicit multi-vault workflows but risky when note content is injected into an
+agent prompt. A malicious note could otherwise ask the agent to pass an override
+that reads or writes outside the intended vault.
+
+By default, overrides are locked to the configured vault and workspace after
+bootstrap. To allow more than one root, set `OBSIDIAN_ALLOWED_VAULTS` to a
+colon-separated list of absolute roots. `CODEX_OBSIDIAN_ALLOWED_VAULTS` and
+`GEMINI_OBSIDIAN_ALLOWED_VAULTS` are also accepted. The server resolves symlinks
+before enforcing the boundary, and applies the same containment check to
+`workspace_path` because it creates index and cache directories.
 
 ### Option 2: Runtime configuration
 

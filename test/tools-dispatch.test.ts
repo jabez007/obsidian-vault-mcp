@@ -1,14 +1,37 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
+import { createToolContext } from '../src/index';
 import {
   dispatchCliTool,
   dispatchMcpTool,
   listToolsResponse,
 } from '../src/tools/dispatch';
-import type { ToolConfig, ToolContext, VaultIndexerLike } from '../src/tools/types';
+import type { ToolConfig, VaultIndexerLike } from '../src/tools/types';
 
-function createFakeContext(configOverrides: Partial<ToolConfig> = {}) {
+const allowedVaultEnvKeys = [
+  'OBSIDIAN_ALLOWED_VAULTS',
+  'CODEX_OBSIDIAN_ALLOWED_VAULTS',
+  'GEMINI_OBSIDIAN_ALLOWED_VAULTS',
+] as const;
+const originalAllowedVaultEnv = Object.fromEntries(
+  allowedVaultEnvKeys.map((key) => [key, process.env[key]]),
+);
+let tempDirs: string[] = [];
+
+async function makeTempDir(prefix: string) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  tempDirs.push(tempDir);
+  return tempDir;
+}
+
+async function createFakeContext(configOverrides: Partial<ToolConfig> = {}) {
+  const vaultPath = Object.prototype.hasOwnProperty.call(configOverrides, 'vault_path')
+    ? configOverrides.vault_path ?? null
+    : await makeTempDir('vault-dispatch-');
   const config: ToolConfig = {
-    vault_path: '/vault',
+    vault_path: vaultPath,
     workspace_path: null,
     vault_id: null,
     ...configOverrides,
@@ -24,41 +47,35 @@ function createFakeContext(configOverrides: Partial<ToolConfig> = {}) {
     ]),
   };
 
-  const context: ToolContext = {
-    indexer,
-    getVaultPath(providedPath?: unknown) {
-      const vaultPath =
-        typeof providedPath === 'string' && providedPath.length > 0
-          ? providedPath
-          : config.vault_path;
-      if (!vaultPath) throw new Error('Vault path is not set.');
-      return vaultPath;
-    },
-    getWorkspacePath(providedPath?: unknown) {
-      return typeof providedPath === 'string' && providedPath.length > 0
-        ? providedPath
-        : config.workspace_path;
-    },
-    getVaultId(providedId?: unknown) {
-      return typeof providedId === 'string' && providedId.length > 0
-        ? providedId
-        : config.vault_id;
-    },
-    getConfig() {
-      return { ...config };
-    },
-    async setConfig(options) {
-      config.vault_path = options.vaultPath;
-      config.workspace_path = options.workspacePath ?? null;
-      config.vault_id = options.vaultId ?? null;
-      await indexer.reset();
-    },
-  };
+  const context = createToolContext(indexer, config, {
+    saveConfig: vi.fn(async () => {}),
+  });
 
-  return { context, indexer };
+  return { context, indexer, vaultPath };
 }
 
 describe('tool registry dispatch', () => {
+  beforeEach(() => {
+    for (const key of allowedVaultEnvKeys) {
+      delete process.env[key];
+    }
+    tempDirs = [];
+  });
+
+  afterEach(async () => {
+    for (const tempDir of tempDirs.reverse()) {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+    for (const key of allowedVaultEnvKeys) {
+      const originalValue = originalAllowedVaultEnv[key];
+      if (originalValue === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = originalValue;
+      }
+    }
+  });
+
   it('generates the MCP tool list from the registry', () => {
     const response = listToolsResponse();
     expect(response.tools).toHaveLength(18);
@@ -70,14 +87,20 @@ describe('tool registry dispatch', () => {
   });
 
   it('dispatches MCP calls through the registry and includes RAG relevance', async () => {
-    const { context, indexer } = createFakeContext();
+    const allowedRoot = await makeTempDir('allowed-vaults-');
+    const vaultPath = path.join(allowedRoot, 'vault');
+    const altVaultPath = path.join(allowedRoot, 'alt-vault');
+    await fs.mkdir(vaultPath);
+    await fs.mkdir(altVaultPath);
+    process.env.OBSIDIAN_ALLOWED_VAULTS = allowedRoot;
+    const { context, indexer } = await createFakeContext({ vault_path: vaultPath });
     const result = await dispatchMcpTool(
       'obsidian_rag_query',
-      { query: 'needle', limit: 3, vault_path: '/alt-vault' },
+      { query: 'needle', limit: 3, vault_path: altVaultPath },
       context,
     );
 
-    expect(indexer.search).toHaveBeenCalledWith('needle', '/alt-vault', 3, null, null);
+    expect(indexer.search).toHaveBeenCalledWith('needle', altVaultPath, 3, null, null);
     expect(result.content[0].text).toBe(
       '---\nFile: Notes/A.md\nRelevance: 0.875\nContent: matched text\n---\n' +
       '---\nFile: Notes/B.md\nRelevance: 0.125\nContent: fallback text\n---',
@@ -85,9 +108,9 @@ describe('tool registry dispatch', () => {
   });
 
   it('dispatches CLI calls through the registry and parses boolean flag values', async () => {
-    const { context, indexer } = createFakeContext();
+    const { context, indexer, vaultPath } = await createFakeContext();
     const result = await dispatchCliTool(
-      ['obsidian_rag_index', '--vault_path', '/vault', '--force_reindex', 'true'],
+      ['obsidian_rag_index', '--vault_path', vaultPath, '--force_reindex', 'true'],
       context,
       async () => '',
     );
@@ -97,29 +120,30 @@ describe('tool registry dispatch', () => {
       exitCode: 0,
       output: JSON.stringify({ success: true, chunks: 2 }),
     });
-    expect(indexer.indexVault).toHaveBeenCalledWith('/vault', true, null, null);
+    expect(indexer.indexVault).toHaveBeenCalledWith(vaultPath, true, null, null);
   });
 
   it('parses the legacy CLI --force boolean alias', async () => {
-    const { context, indexer } = createFakeContext();
+    const { context, indexer, vaultPath } = await createFakeContext();
     await dispatchCliTool(
-      ['obsidian_rag_index', '--vault_path', '/vault', '--force', 'true'],
+      ['obsidian_rag_index', '--vault_path', vaultPath, '--force', 'true'],
       context,
       async () => '',
     );
 
-    expect(indexer.indexVault).toHaveBeenCalledWith('/vault', true, null, null);
+    expect(indexer.indexVault).toHaveBeenCalledWith(vaultPath, true, null, null);
   });
 
   it('keeps the obsidian_rag_index --hook stdin mode', async () => {
-    const { context, indexer } = createFakeContext();
+    const workspacePath = await makeTempDir('workspace-dispatch-');
+    const { context, indexer, vaultPath } = await createFakeContext({ workspace_path: workspacePath });
     const result = await dispatchCliTool(
       ['obsidian_rag_index', '--hook'],
       context,
       async () => JSON.stringify({
         tool_input: {
-          vault_path: '/vault',
-          workspace_path: '/workspace',
+          vault_path: vaultPath,
+          workspace_path: workspacePath,
           vault_id: 'main',
           file_path: 'Daily.md',
           force_reindex: true,
@@ -128,11 +152,11 @@ describe('tool registry dispatch', () => {
     );
 
     expect(result.exitCode).toBe(0);
-    expect(indexer.indexFile).toHaveBeenCalledWith('/vault', 'Daily.md', '/workspace', 'main');
+    expect(indexer.indexFile).toHaveBeenCalledWith(vaultPath, 'Daily.md', workspacePath, 'main');
   });
 
   it('prints the same RAG query text for CLI as MCP', async () => {
-    const { context } = createFakeContext();
+    const { context } = await createFakeContext();
     const cliResult = await dispatchCliTool(
       ['obsidian_rag_query', '--query', 'needle'],
       context,
@@ -142,5 +166,118 @@ describe('tool registry dispatch', () => {
 
     expect(cliResult.output).toBe(mcpResult.content[0].text);
     expect(cliResult.output).toContain('Relevance: 0.125');
+  });
+
+  it('rejects vault and workspace overrides outside OBSIDIAN_ALLOWED_VAULTS', async () => {
+    const allowedRoot = await makeTempDir('allowed-vaults-');
+    const vaultPath = path.join(allowedRoot, 'vault');
+    const outOfBoundsVault = await makeTempDir('outside-vault-');
+    const outOfBoundsWorkspace = await makeTempDir('outside-workspace-');
+    await fs.mkdir(vaultPath);
+    process.env.OBSIDIAN_ALLOWED_VAULTS = allowedRoot;
+    const { context } = await createFakeContext({ vault_path: vaultPath });
+
+    await expect(dispatchMcpTool(
+      'obsidian_rag_query',
+      { query: 'needle', vault_path: outOfBoundsVault },
+      context,
+    )).rejects.toThrow(/vault_path is outside the allowed vault boundary/);
+
+    await expect(dispatchMcpTool(
+      'obsidian_rag_index',
+      { vault_path: vaultPath, workspace_path: outOfBoundsWorkspace },
+      context,
+    )).rejects.toThrow(/workspace_path is outside the allowed vault boundary/);
+  });
+
+  it('accepts allowed vault and workspace overrides inside OBSIDIAN_ALLOWED_VAULTS', async () => {
+    const allowedRoot = await makeTempDir('allowed-vaults-');
+    const vaultPath = path.join(allowedRoot, 'vault');
+    const altVaultPath = path.join(allowedRoot, 'alt-vault');
+    const workspacePath = path.join(allowedRoot, 'workspace', 'indexes');
+    await fs.mkdir(vaultPath);
+    await fs.mkdir(altVaultPath);
+    process.env.OBSIDIAN_ALLOWED_VAULTS = allowedRoot;
+    const { context, indexer } = await createFakeContext({ vault_path: vaultPath });
+
+    await dispatchMcpTool(
+      'obsidian_rag_index',
+      {
+        vault_path: altVaultPath,
+        workspace_path: workspacePath,
+        force_reindex: true,
+      },
+      context,
+    );
+
+    expect(indexer.indexVault).toHaveBeenCalledWith(altVaultPath, true, workspacePath, null);
+  });
+
+  it('resolves symlinks before enforcing boundaries', async () => {
+    const allowedRoot = await makeTempDir('allowed-vaults-');
+    const vaultPath = path.join(allowedRoot, 'vault');
+    await fs.mkdir(vaultPath);
+    const symlinkToVault = path.join(await makeTempDir('symlink-parent-'), 'vault-link');
+    await fs.symlink(vaultPath, symlinkToVault, 'dir');
+    const { context, indexer } = await createFakeContext({ vault_path: vaultPath });
+
+    await dispatchMcpTool(
+      'obsidian_rag_query',
+      { query: 'needle', vault_path: symlinkToVault },
+      context,
+    );
+
+    expect(indexer.search).toHaveBeenCalledWith('needle', symlinkToVault, 5, null, null);
+
+    const outOfBoundsVault = await makeTempDir('outside-vault-');
+    const symlinkInsideBoundary = path.join(allowedRoot, 'outside-link');
+    await fs.symlink(outOfBoundsVault, symlinkInsideBoundary, 'dir');
+    process.env.OBSIDIAN_ALLOWED_VAULTS = allowedRoot;
+    const allowlistContext = (await createFakeContext({ vault_path: vaultPath })).context;
+
+    await expect(dispatchMcpTool(
+      'obsidian_rag_query',
+      { query: 'needle', vault_path: symlinkInsideBoundary },
+      allowlistContext,
+    )).rejects.toThrow(/vault_path is outside the allowed vault boundary/);
+  });
+
+  it('bootstraps obsidian_set_vault when no vault is configured, then keeps overrides in that vault', async () => {
+    const vaultPath = await makeTempDir('bootstrap-vault-');
+    const otherVaultPath = await makeTempDir('other-vault-');
+    const { context, indexer } = await createFakeContext({ vault_path: null });
+
+    await dispatchMcpTool('obsidian_set_vault', { path: vaultPath }, context);
+    await dispatchMcpTool('obsidian_rag_query', { query: 'needle' }, context);
+
+    expect(indexer.reset).toHaveBeenCalledOnce();
+    expect(indexer.search).toHaveBeenCalledWith('needle', vaultPath, 5, null, null);
+    await expect(dispatchMcpTool(
+      'obsidian_rag_query',
+      { query: 'needle', vault_path: otherVaultPath },
+      context,
+    )).rejects.toThrow(/vault_path is outside the allowed vault boundary/);
+  });
+
+  it('requires overwrite=true before obsidian_move_note replaces an existing destination', async () => {
+    const { context, indexer, vaultPath } = await createFakeContext();
+    await fs.writeFile(path.join(vaultPath, 'source.md'), 'source', 'utf-8');
+    await fs.writeFile(path.join(vaultPath, 'dest.md'), 'dest', 'utf-8');
+
+    await expect(dispatchMcpTool(
+      'obsidian_move_note',
+      { source_path: 'source.md', dest_path: 'dest.md' },
+      context,
+    )).rejects.toThrow(/Destination note already exists/);
+    await expect(fs.readFile(path.join(vaultPath, 'dest.md'), 'utf-8')).resolves.toBe('dest');
+
+    await dispatchMcpTool(
+      'obsidian_move_note',
+      { source_path: 'source.md', dest_path: 'dest.md', overwrite: true },
+      context,
+    );
+
+    await expect(fs.readFile(path.join(vaultPath, 'dest.md'), 'utf-8')).resolves.toBe('source');
+    expect(indexer.moveFile).toHaveBeenCalledWith(vaultPath, 'source.md', 'dest.md', null, null);
   });
 });

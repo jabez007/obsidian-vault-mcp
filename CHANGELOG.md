@@ -34,6 +34,16 @@ All notable changes to this project will be documented in this file.
 - The MCP server reads its name and version from `package.json` at runtime,
   and tests enforce that all host manifests match the package version.
 
+### Security
+
+- Added `OBSIDIAN_ALLOWED_VAULTS` plus `CODEX_` and `GEMINI_` variants to
+  bound per-call `vault_path` and `workspace_path` overrides. When unset,
+  overrides must resolve to the configured vault or workspace after bootstrap.
+  Symlinks are resolved before enforcement so prompt-injected note content
+  cannot redirect tools to arbitrary filesystem locations.
+- `obsidian_move_note` now refuses to replace an existing destination unless
+  callers pass `overwrite: true`.
+
 ### Refactor
 
 - Extracted all 18 tools into a single registry (`src/tools/`) that generates
