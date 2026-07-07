@@ -1,6 +1,9 @@
 ## Summary
 Vault boundary does not survive symlinks inside the vault
 
+## Status
+**Resolved** in commit `720c07b` (2026-07-07). `getSafeFilePath` now realpath-resolves targets against the vault's real root plus `OBSIDIAN_ALLOWED_VAULTS`; the ancestor walk uses lstat and resolves dangling symlinks via readlink (bounded depth), closing the write-through-dangling-link escape found in review. Vault scans keep `follow: true` but filter each discovered file by its real path. The boundary helpers were deduplicated into `src/utils.ts` (removing the diverging copies in `src/index.ts`), and a symlinked `.obsidian` folder falls back to default daily-note config instead of failing. Regression tests cover read/create/index escapes, the dangling-link case, and allowlist pass-through. Deferred as optional polish: caching realpath'd roots in `getSafeFilePath` to cut per-file sync syscalls on large vaults.
+
 ## Context
 The confused-deputy hardening (commit `06d2cc9`) realpath-resolves the *vault path itself* (`resolveRealPathAllowMissing` in `src/index.ts`), but `getSafeFilePath` (`src/utils.ts`) validates containment lexically via `path.resolve`, which does not follow symlinks. A symlink inside the vault pointing at, e.g., `~/.ssh` passes the containment check, and all read/write tools will follow it. The indexer additionally globs with `follow: true`, so a symlinked directory pulls external files into the embedding index. Given the stated threat model — a confused LLM as the deputy — this is the remaining hole in the fence.
 

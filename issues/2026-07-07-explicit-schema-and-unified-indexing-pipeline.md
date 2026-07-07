@@ -2,7 +2,7 @@
 Implement the explicit LanceDB schema and use it to collapse the triplicated indexing/recovery logic
 
 ## Context
-Extends [[2026-04-27-move-to-explicit-lancedb-schema]] (issues/2026-04-27-move-to-explicit-lancedb-schema.md). The open-table → check-`hasEntities` → drop-and-recreate dance currently appears three times in `src/rag/store.ts` (`indexFile`, `indexVault`'s `persistChunks`, `moveFile`), each slightly different. The per-note pipeline (read → gray-matter → chunk → embed → delete-old-rows → add) is likewise duplicated across the three public methods. An explicit schema dissolves the recovery branches; a shared helper dissolves the pipeline duplication.
+Extends [[2026-04-27-move-to-explicit-lancedb-schema]] (issues/2026-04-27-move-to-explicit-lancedb-schema.md). The open-table → check-`hasEntities` → drop-and-recreate dance appears in `src/rag/store.ts` in `indexFile` and `moveFile` (commit `7b29e9a` already consolidated `indexVault`'s copies into a single up-front schema check plus a drop-before-first-write reset path). The per-note pipeline (read → gray-matter → chunk → embed → delete-old-rows → add) is likewise duplicated across the three public methods. An explicit schema dissolves the remaining recovery branches; a shared helper dissolves the pipeline duplication.
 
 ## Proposed Changes
 1. **Explicit Arrow schema** for the `notes` table: `id` (String), `path` (String), `text` (String), `vector` (fixed-size List<Float32>), `entities` (List<String>), `communities` (List<String>). Create the table from the schema instead of inferring from the first batch.
@@ -24,4 +24,4 @@ Extends [[2026-04-27-move-to-explicit-lancedb-schema]] (issues/2026-04-27-move-t
 **Medium** — Breaking change for existing indices (one-time forced rebuild). Substantially reduces the surface area for divergence bugs in `store.ts`.
 
 ## Additional Context
-Supersedes and extends issues/2026-04-27-move-to-explicit-lancedb-schema.md. Prerequisite for [[2026-07-07-graph-aware-retrieval-quality]]. Coordinate with the force-reindex duplication fix ([[2026-07-07-fix-force-reindex-chunk-duplication]]) so the "full reindex" path is correct before it becomes the migration mechanism.
+Supersedes and extends issues/2026-04-27-move-to-explicit-lancedb-schema.md. Prerequisite for [[2026-07-07-graph-aware-retrieval-quality]]. The force-reindex duplication fix ([[2026-07-07-fix-force-reindex-chunk-duplication]], resolved in `7b29e9a`) landed first, so the "full reindex" path is now correct and can serve as the migration mechanism.
