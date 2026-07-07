@@ -36,6 +36,7 @@ function assertNativeDependencies() {
     try {
         require.resolve("@lancedb/lancedb");
         require.resolve("@huggingface/transformers");
+        require.resolve("apache-arrow");
     } catch {
         console.error(
             "\n[Obsidian MCP] Error: Required native dependencies are missing.",

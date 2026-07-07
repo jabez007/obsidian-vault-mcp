@@ -1,6 +1,9 @@
 ## Summary
 Implement the explicit LanceDB schema and use it to collapse the triplicated indexing/recovery logic
 
+## Status
+**Resolved** (2026-07-07). The `notes` table is created from an explicit Arrow schema (`entities`/`communities` as `List<Utf8>`, fixed-size 384 vector); a `schema-version.json` stamp drives one migration path — write operations on a version-mismatched index refuse with a "run force_reindex" message, and a forced full reindex rebuilds and restamps. Chunk preparation is shared (`prepareNoteChunks`) between the single-note pipeline (`indexNoteIntoTable`, used by `indexFile`/`moveFile`) and `indexVault`'s batched two-phase pipeline (concurrent reads, length-sorted 48-chunk embedding batches, accumulated writes, progress reporting — all preserved). Both deferred-drop edge cases are fixed: a full reindex drops the stale table up front (emptied vault yields an empty index), and embedding failures fail loudly while persisting only the successful hashes so failed files retry next run, with the freshness metadata withheld so queries keep warning. `apache-arrow` is externalized in the esbuild bundle alongside LanceDB (its peer dependency) to avoid a dual-Arrow-instance hazard in the published artifact.
+
 ## Context
 Extends [[2026-04-27-move-to-explicit-lancedb-schema]] (issues/2026-04-27-move-to-explicit-lancedb-schema.md). The open-table → check-`hasEntities` → drop-and-recreate dance appears in `src/rag/store.ts` in `indexFile` and `moveFile` (commit `7b29e9a` already consolidated `indexVault`'s copies into a single up-front schema check plus a drop-before-first-write reset path). The per-note pipeline (read → gray-matter → chunk → embed → delete-old-rows → add) is likewise duplicated across the three public methods. An explicit schema dissolves the remaining recovery branches; a shared helper dissolves the pipeline duplication.
 

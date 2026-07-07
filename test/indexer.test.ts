@@ -5,13 +5,21 @@ import * as os from 'os';
 import { LEGACY_STORAGE_DIR_NAME, STORAGE_DIR_NAME, VaultIndexer } from '../src/rag/store';
 import md5 from 'md5';
 
-// Mock the embedder to avoid loading real models during tests
+// Mock the embedder to avoid loading real models during tests. Texts
+// containing the FAILEMBED marker are rejected so tests can exercise
+// partial embedding failures.
 vi.mock('../src/rag/embedder', () => ({
   Embedder: {
     getInstance: () => ({
-      embed: vi.fn().mockResolvedValue(new Array(384).fill(0.1)),
-      embedBatch: vi.fn().mockImplementation((texts: string[]) => 
-        Promise.resolve(texts.map(() => new Array(384).fill(0.1)))
+      embed: vi.fn().mockImplementation((text: string) =>
+        text.includes('FAILEMBED')
+          ? Promise.reject(new Error('mock embed failure'))
+          : Promise.resolve(new Array(384).fill(0.1))
+      ),
+      embedBatch: vi.fn().mockImplementation((texts: string[]) =>
+        texts.some((text) => text.includes('FAILEMBED'))
+          ? Promise.reject(new Error('mock embed failure'))
+          : Promise.resolve(texts.map(() => new Array(384).fill(0.1)))
       ),
     })
   }
@@ -357,6 +365,33 @@ describe('VaultIndexer path resolution and storage', () => {
     });
   });
 
+  it('records successful hashes when some files fail to embed so they retry next run', async () => {
+    await fs.writeFile(
+      path.join(vaultPath, 'ok.md'),
+      'This note is long enough to embed successfully during a partially failing reindex.',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(vaultPath, 'bad.md'),
+      'FAILEMBED this note is long enough to chunk but the embedder is rigged to reject it.',
+      'utf-8',
+    );
+
+    const result = await indexer.indexVault(vaultPath, true, workspacePath);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('Failed to index 1 file(s)');
+
+    // The hash file must reflect only the fully indexed files, so the failed
+    // one is retried by the next incremental run instead of being masked.
+    const hashPath = path.join(getVaultStorePath(), 'file-hashes.json');
+    const hashes = JSON.parse(await fs.readFile(hashPath, 'utf-8'));
+    expect(Object.keys(hashes)).toEqual(['ok.md']);
+
+    // The freshness metadata is withheld, so queries keep warning.
+    await expect(indexer.checkIndexStaleness(vaultPath, workspacePath)).resolves.toMatchObject({ stale: true });
+  });
+
   it('keeps reporting stale after a single-file reindex when other files changed externally', async () => {
     const notePathA = path.join(vaultPath, 'a.md');
     const notePathB = path.join(vaultPath, 'b.md');
@@ -380,39 +415,49 @@ describe('VaultIndexer path resolution and storage', () => {
     });
   });
 
-  it('falls back to a full reindex when the table is missing the entities column', async () => {
+  it('requires a forced full reindex when the schema version stamp is stale', async () => {
     await fs.writeFile(
       path.join(vaultPath, 'note.md'),
-      'This note is long enough to be indexed and will survive a legacy schema migration.',
+      'This note is long enough to be indexed and will survive an explicit schema migration.',
       'utf-8',
     );
 
     await indexer.indexVault(vaultPath, true, workspacePath);
 
-    // Replace the table with a legacy-schema copy (no entities/communities
-    // columns) while keeping the hash file, so the next run looks incremental.
     const lancedb = await import('@lancedb/lancedb');
     const vaultHash = md5(path.resolve(vaultPath));
-    const dbPath = path.join(workspacePath, STORAGE_DIR_NAME, 'vaults', vaultHash, 'lancedb');
-    const db = await lancedb.connect(dbPath);
-    await db.dropTable('notes');
-    await db.createTable('notes', [
-      { id: 'legacy', path: 'note.md', text: 'legacy row', vector: new Array(384).fill(0.1) },
-    ]);
-    if (typeof db.close === 'function') {
-      db.close();
-    }
+    const storePath = path.join(workspacePath, STORAGE_DIR_NAME, 'vaults', vaultHash);
+    const dbPath = path.join(storePath, 'lancedb');
+    const schemaVersionPath = path.join(storePath, 'schema-version.json');
+    await fs.writeFile(schemaVersionPath, JSON.stringify({ notesTableSchemaVersion: 1 }), 'utf-8');
 
     const result = await indexer.indexVault(vaultPath, false, workspacePath);
 
-    expect(result.success).toBe(true);
-    expect(result.chunks).toBe(1);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('force_reindex=true');
+
+    const staleDb = await lancedb.connect(dbPath);
+    try {
+      const table = await staleDb.openTable('notes');
+      expect(await table.countRows()).toBe(1);
+    } finally {
+      if (typeof staleDb.close === 'function') {
+        staleDb.close();
+      }
+    }
+
+    const forcedResult = await indexer.indexVault(vaultPath, true, workspacePath);
+    expect(forcedResult.success).toBe(true);
+    await expect(fs.readFile(schemaVersionPath, 'utf-8'))
+      .resolves.toContain('"notesTableSchemaVersion":2');
 
     const verifyDb = await lancedb.connect(dbPath);
     try {
       const table = await verifyDb.openTable('notes');
       const schema = await table.schema();
       expect(schema.fields.some((f: any) => f.name === 'entities')).toBe(true);
+      expect(schema.fields.find((f: any) => f.name === 'entities')?.type.toString()).toBe('List<Utf8>');
+      expect(schema.fields.find((f: any) => f.name === 'vector')?.type.toString()).toBe('FixedSizeList[384]<Float32>');
       expect(await table.countRows()).toBe(1);
     } finally {
       if (typeof verifyDb.close === 'function') {

@@ -7,11 +7,20 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
 };
 var __commonJS = (cb, mod) => function __require() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
 };
 var __export = (target, all) => {
   for (var name in all)
@@ -4535,7 +4544,7 @@ var require_schema = __commonJS({
       }
       return result;
     }
-    function Schema(definition) {
+    function Schema2(definition) {
       this.include = definition.include || [];
       this.implicit = definition.implicit || [];
       this.explicit = definition.explicit || [];
@@ -4548,12 +4557,12 @@ var require_schema = __commonJS({
       this.compiledExplicit = compileList(this, "explicit", []);
       this.compiledTypeMap = compileMap(this.compiledImplicit, this.compiledExplicit);
     }
-    Schema.DEFAULT = null;
-    Schema.create = function createSchema() {
+    Schema2.DEFAULT = null;
+    Schema2.create = function createSchema() {
       var schemas, types;
       switch (arguments.length) {
         case 1:
-          schemas = Schema.DEFAULT;
+          schemas = Schema2.DEFAULT;
           types = arguments[0];
           break;
         case 2:
@@ -4566,7 +4575,7 @@ var require_schema = __commonJS({
       schemas = common.toArray(schemas);
       types = common.toArray(types);
       if (!schemas.every(function(schema) {
-        return schema instanceof Schema;
+        return schema instanceof Schema2;
       })) {
         throw new YAMLException("Specified list of super schemas (or a single Schema object) contains a non-Schema object.");
       }
@@ -4575,12 +4584,12 @@ var require_schema = __commonJS({
       })) {
         throw new YAMLException("Specified list of YAML types (or a single Type object) contains a non-Type object.");
       }
-      return new Schema({
+      return new Schema2({
         include: schemas,
         explicit: types
       });
     };
-    module2.exports = Schema;
+    module2.exports = Schema2;
   }
 });
 
@@ -4630,8 +4639,8 @@ var require_map = __commonJS({
 var require_failsafe = __commonJS({
   "node_modules/js-yaml/lib/js-yaml/schema/failsafe.js"(exports2, module2) {
     "use strict";
-    var Schema = require_schema();
-    module2.exports = new Schema({
+    var Schema2 = require_schema();
+    module2.exports = new Schema2({
       explicit: [
         require_str(),
         require_seq(),
@@ -4950,8 +4959,8 @@ var require_float = __commonJS({
 var require_json = __commonJS({
   "node_modules/js-yaml/lib/js-yaml/schema/json.js"(exports2, module2) {
     "use strict";
-    var Schema = require_schema();
-    module2.exports = new Schema({
+    var Schema2 = require_schema();
+    module2.exports = new Schema2({
       include: [
         require_failsafe()
       ],
@@ -4969,8 +4978,8 @@ var require_json = __commonJS({
 var require_core = __commonJS({
   "node_modules/js-yaml/lib/js-yaml/schema/core.js"(exports2, module2) {
     "use strict";
-    var Schema = require_schema();
-    module2.exports = new Schema({
+    var Schema2 = require_schema();
+    module2.exports = new Schema2({
       include: [
         require_json()
       ]
@@ -5253,8 +5262,8 @@ var require_set = __commonJS({
 var require_default_safe = __commonJS({
   "node_modules/js-yaml/lib/js-yaml/schema/default_safe.js"(exports2, module2) {
     "use strict";
-    var Schema = require_schema();
-    module2.exports = new Schema({
+    var Schema2 = require_schema();
+    module2.exports = new Schema2({
       include: [
         require_core()
       ],
@@ -5402,8 +5411,8 @@ var require_function = __commonJS({
 var require_default_full = __commonJS({
   "node_modules/js-yaml/lib/js-yaml/schema/default_full.js"(exports2, module2) {
     "use strict";
-    var Schema = require_schema();
-    module2.exports = Schema.DEFAULT = new Schema({
+    var Schema2 = require_schema();
+    module2.exports = Schema2.DEFAULT = new Schema2({
       include: [
         require_default_safe()
       ],
@@ -5521,6 +5530,7 @@ var require_loader = __commonJS({
       this.legacy = options2["legacy"] || false;
       this.json = options2["json"] || false;
       this.listener = options2["listener"] || null;
+      this.maxTotalMergeKeys = typeof options2["maxTotalMergeKeys"] === "number" ? options2["maxTotalMergeKeys"] : 1e4;
       this.implicitTypes = this.schema.compiledImplicit;
       this.typeMap = this.schema.compiledTypeMap;
       this.length = input.length;
@@ -5528,6 +5538,7 @@ var require_loader = __commonJS({
       this.line = 0;
       this.lineStart = 0;
       this.lineIndent = 0;
+      this.totalMergeKeys = 0;
       this.documents = [];
     }
     function generateError(state, message) {
@@ -5612,6 +5623,9 @@ var require_loader = __commonJS({
       sourceKeys = Object.keys(source);
       for (index = 0, quantity = sourceKeys.length; index < quantity; index += 1) {
         key = sourceKeys[index];
+        if (state.maxTotalMergeKeys !== -1 && ++state.totalMergeKeys > state.maxTotalMergeKeys) {
+          throwError(state, "merge keys exceeded maxTotalMergeKeys (" + state.maxTotalMergeKeys + ")");
+        }
         if (!_hasOwnProperty.call(destination, key)) {
           setProperty(destination, key, source[key]);
           overridableKeys[key] = true;
@@ -28294,6 +28308,9 @@ var require_utils2 = __commonJS({
     "use strict";
     var isUUID = RegExp.prototype.test.bind(/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/iu);
     var isIPv4 = RegExp.prototype.test.bind(/^(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$/u);
+    var isHexPair = RegExp.prototype.test.bind(/^[\da-f]{2}$/iu);
+    var isUnreserved = RegExp.prototype.test.bind(/^[\da-z\-._~]$/iu);
+    var isPathCharacter = RegExp.prototype.test.bind(/^[\da-z\-._~!$&'()*+,;=:@/]$/iu);
     function stringArrayToHexStripped(input) {
       let acc = "";
       let code = 0;
@@ -28486,27 +28503,77 @@ var require_utils2 = __commonJS({
       }
       return output.join("");
     }
-    function normalizeComponentEncoding(component, esc2) {
-      const func = esc2 !== true ? escape : unescape;
-      if (component.scheme !== void 0) {
-        component.scheme = func(component.scheme);
+    var HOST_DELIMS = { "@": "%40", "/": "%2F", "?": "%3F", "#": "%23", ":": "%3A" };
+    var HOST_DELIM_RE = /[@/?#:]/g;
+    var HOST_DELIM_NO_COLON_RE = /[@/?#]/g;
+    function reescapeHostDelimiters(host, isIP) {
+      const re2 = isIP ? HOST_DELIM_NO_COLON_RE : HOST_DELIM_RE;
+      re2.lastIndex = 0;
+      return host.replace(re2, (ch) => HOST_DELIMS[ch]);
+    }
+    function normalizePercentEncoding(input, decodeUnreserved = false) {
+      if (input.indexOf("%") === -1) {
+        return input;
       }
-      if (component.userinfo !== void 0) {
-        component.userinfo = func(component.userinfo);
+      let output = "";
+      for (let i = 0; i < input.length; i++) {
+        if (input[i] === "%" && i + 2 < input.length) {
+          const hex3 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex3)) {
+            const normalizedHex = hex3.toUpperCase();
+            const decoded = String.fromCharCode(parseInt(normalizedHex, 16));
+            if (decodeUnreserved && isUnreserved(decoded)) {
+              output += decoded;
+            } else {
+              output += "%" + normalizedHex;
+            }
+            i += 2;
+            continue;
+          }
+        }
+        output += input[i];
       }
-      if (component.host !== void 0) {
-        component.host = func(component.host);
+      return output;
+    }
+    function normalizePathEncoding(input) {
+      let output = "";
+      for (let i = 0; i < input.length; i++) {
+        if (input[i] === "%" && i + 2 < input.length) {
+          const hex3 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex3)) {
+            const normalizedHex = hex3.toUpperCase();
+            const decoded = String.fromCharCode(parseInt(normalizedHex, 16));
+            if (decoded !== "." && isUnreserved(decoded)) {
+              output += decoded;
+            } else {
+              output += "%" + normalizedHex;
+            }
+            i += 2;
+            continue;
+          }
+        }
+        if (isPathCharacter(input[i])) {
+          output += input[i];
+        } else {
+          output += escape(input[i]);
+        }
       }
-      if (component.path !== void 0) {
-        component.path = func(component.path);
+      return output;
+    }
+    function escapePreservingEscapes(input) {
+      let output = "";
+      for (let i = 0; i < input.length; i++) {
+        if (input[i] === "%" && i + 2 < input.length) {
+          const hex3 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex3)) {
+            output += "%" + hex3.toUpperCase();
+            i += 2;
+            continue;
+          }
+        }
+        output += escape(input[i]);
       }
-      if (component.query !== void 0) {
-        component.query = func(component.query);
-      }
-      if (component.fragment !== void 0) {
-        component.fragment = func(component.fragment);
-      }
-      return component;
+      return output;
     }
     function recomposeAuthority(component) {
       const uriTokens = [];
@@ -28521,7 +28588,7 @@ var require_utils2 = __commonJS({
           if (ipV6res.isIPV6 === true) {
             host = `[${ipV6res.escapedHost}]`;
           } else {
-            host = component.host;
+            host = reescapeHostDelimiters(host, false);
           }
         }
         uriTokens.push(host);
@@ -28535,7 +28602,10 @@ var require_utils2 = __commonJS({
     module2.exports = {
       nonSimpleDomain,
       recomposeAuthority,
-      normalizeComponentEncoding,
+      reescapeHostDelimiters,
+      normalizePercentEncoding,
+      normalizePathEncoding,
+      escapePreservingEscapes,
       removeDotSegments,
       isIPv4,
       isUUID,
@@ -28759,12 +28829,12 @@ var require_schemes = __commonJS({
 var require_fast_uri = __commonJS({
   "node_modules/fast-uri/index.js"(exports2, module2) {
     "use strict";
-    var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizeComponentEncoding, isIPv4, nonSimpleDomain } = require_utils2();
+    var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizePercentEncoding, normalizePathEncoding, escapePreservingEscapes, reescapeHostDelimiters, isIPv4, nonSimpleDomain } = require_utils2();
     var { SCHEMES, getSchemeHandler } = require_schemes();
     function normalize(uri, options2) {
       if (typeof uri === "string") {
         uri = /** @type {T} */
-        serialize(parse4(uri, options2), options2);
+        normalizeString(uri, options2);
       } else if (typeof uri === "object") {
         uri = /** @type {T} */
         parse4(serialize(uri, options2), options2);
@@ -28831,19 +28901,9 @@ var require_fast_uri = __commonJS({
       return target;
     }
     function equal(uriA, uriB, options2) {
-      if (typeof uriA === "string") {
-        uriA = unescape(uriA);
-        uriA = serialize(normalizeComponentEncoding(parse4(uriA, options2), true), { ...options2, skipEscape: true });
-      } else if (typeof uriA === "object") {
-        uriA = serialize(normalizeComponentEncoding(uriA, true), { ...options2, skipEscape: true });
-      }
-      if (typeof uriB === "string") {
-        uriB = unescape(uriB);
-        uriB = serialize(normalizeComponentEncoding(parse4(uriB, options2), true), { ...options2, skipEscape: true });
-      } else if (typeof uriB === "object") {
-        uriB = serialize(normalizeComponentEncoding(uriB, true), { ...options2, skipEscape: true });
-      }
-      return uriA.toLowerCase() === uriB.toLowerCase();
+      const normalizedA = normalizeComparableURI(uriA, options2);
+      const normalizedB = normalizeComparableURI(uriB, options2);
+      return normalizedA !== void 0 && normalizedB !== void 0 && normalizedA.toLowerCase() === normalizedB.toLowerCase();
     }
     function serialize(cmpts, opts) {
       const component = {
@@ -28868,12 +28928,12 @@ var require_fast_uri = __commonJS({
       if (schemeHandler && schemeHandler.serialize) schemeHandler.serialize(component, options2);
       if (component.path !== void 0) {
         if (!options2.skipEscape) {
-          component.path = escape(component.path);
+          component.path = escapePreservingEscapes(component.path);
           if (component.scheme !== void 0) {
             component.path = component.path.split("%3A").join(":");
           }
         } else {
-          component.path = unescape(component.path);
+          component.path = normalizePercentEncoding(component.path);
         }
       }
       if (options2.reference !== "suffix" && component.scheme) {
@@ -28908,7 +28968,16 @@ var require_fast_uri = __commonJS({
       return uriTokens.join("");
     }
     var URI_PARSE = /^(?:([^#/:?]+):)?(?:\/\/((?:([^#/?@]*)@)?(\[[^#/?\]]+\]|[^#/:?]*)(?::(\d*))?))?([^#?]*)(?:\?([^#]*))?(?:#((?:.|[\n\r])*))?/u;
-    function parse4(uri, opts) {
+    function getParseError(parsed, matches) {
+      if (matches[2] !== void 0 && parsed.path && parsed.path[0] !== "/") {
+        return 'URI path must start with "/" when authority is present.';
+      }
+      if (typeof parsed.port === "number" && (parsed.port < 0 || parsed.port > 65535)) {
+        return "URI port is malformed.";
+      }
+      return void 0;
+    }
+    function parseWithStatus(uri, opts) {
       const options2 = Object.assign({}, opts);
       const parsed = {
         scheme: void 0,
@@ -28919,6 +28988,7 @@ var require_fast_uri = __commonJS({
         query: void 0,
         fragment: void 0
       };
+      let malformedAuthorityOrPort = false;
       let isIP = false;
       if (options2.reference === "suffix") {
         if (options2.scheme) {
@@ -28938,6 +29008,11 @@ var require_fast_uri = __commonJS({
         parsed.fragment = matches[8];
         if (isNaN(parsed.port)) {
           parsed.port = matches[5];
+        }
+        const parseError = getParseError(parsed, matches);
+        if (parseError !== void 0) {
+          parsed.error = parsed.error || parseError;
+          malformedAuthorityOrPort = true;
         }
         if (parsed.host) {
           const ipv4result = isIPv4(parsed.host);
@@ -28965,7 +29040,7 @@ var require_fast_uri = __commonJS({
         if (!options2.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport)) {
           if (parsed.host && (options2.domainHost || schemeHandler && schemeHandler.domainHost) && isIP === false && nonSimpleDomain(parsed.host)) {
             try {
-              parsed.host = URL.domainToASCII(parsed.host.toLowerCase());
+              parsed.host = new URL("http://" + parsed.host).hostname;
             } catch (e) {
               parsed.error = parsed.error || "Host's domain name can not be converted to ASCII: " + e;
             }
@@ -28977,14 +29052,18 @@ var require_fast_uri = __commonJS({
               parsed.scheme = unescape(parsed.scheme);
             }
             if (parsed.host !== void 0) {
-              parsed.host = unescape(parsed.host);
+              parsed.host = reescapeHostDelimiters(unescape(parsed.host), isIP);
             }
           }
           if (parsed.path) {
-            parsed.path = escape(unescape(parsed.path));
+            parsed.path = normalizePathEncoding(parsed.path);
           }
           if (parsed.fragment) {
-            parsed.fragment = encodeURI(decodeURIComponent(parsed.fragment));
+            try {
+              parsed.fragment = encodeURI(decodeURIComponent(parsed.fragment));
+            } catch {
+              parsed.error = parsed.error || "URI malformed";
+            }
           }
         }
         if (schemeHandler && schemeHandler.parse) {
@@ -28993,7 +29072,29 @@ var require_fast_uri = __commonJS({
       } else {
         parsed.error = parsed.error || "URI can not be parsed.";
       }
-      return parsed;
+      return { parsed, malformedAuthorityOrPort };
+    }
+    function parse4(uri, opts) {
+      return parseWithStatus(uri, opts).parsed;
+    }
+    function normalizeString(uri, opts) {
+      return normalizeStringWithStatus(uri, opts).normalized;
+    }
+    function normalizeStringWithStatus(uri, opts) {
+      const { parsed, malformedAuthorityOrPort } = parseWithStatus(uri, opts);
+      return {
+        normalized: malformedAuthorityOrPort ? uri : serialize(parsed, opts),
+        malformedAuthorityOrPort
+      };
+    }
+    function normalizeComparableURI(uri, opts) {
+      if (typeof uri === "string") {
+        const { normalized, malformedAuthorityOrPort } = normalizeStringWithStatus(uri, opts);
+        return malformedAuthorityOrPort ? void 0 : normalized;
+      }
+      if (typeof uri === "object") {
+        return serialize(uri, opts);
+      }
     }
     var fastUri = {
       SCHEMES,
@@ -33225,8 +33326,8 @@ ${baseText}`;
       id: (0, import_md5.default)(`${relativePath}-${chunkIndex}`),
       path: relativePath,
       text: finalTexts[chunkIndex],
-      entities: entities && entities.length > 0 ? entities.join(", ") : "",
-      communities: communities && communities.length > 0 ? communities.join(", ") : ""
+      entities: entities ?? [],
+      communities: communities ?? []
     };
     chunkMetadata.push(meta3);
   }
@@ -33274,7 +33375,7 @@ function chunkingOptionsFromEnv() {
 function sleep(ms2) {
   return new Promise((resolve3) => setTimeout(resolve3, ms2));
 }
-var lancedb, fs5, path4, os2, crypto, import_gray_matter2, import_md52, STORAGE_DIR_NAME, LEGACY_STORAGE_DIR_NAME, INDEX_LOCK_FILE_NAME, INDEX_METADATA_FILE_NAME, VaultIndexer;
+var lancedb, fs5, path4, os2, crypto, import_apache_arrow, import_gray_matter2, import_md52, STORAGE_DIR_NAME, LEGACY_STORAGE_DIR_NAME, INDEX_LOCK_FILE_NAME, INDEX_METADATA_FILE_NAME, SCHEMA_VERSION_FILE_NAME, NOTES_TABLE_NAME, NOTES_TABLE_SCHEMA_VERSION, EMBEDDING_DIMENSIONS, FULL_REINDEX_REQUIRED_MESSAGE, NOTES_TABLE_SCHEMA, VaultIndexer;
 var init_store = __esm({
   "src/rag/store.ts"() {
     "use strict";
@@ -33283,6 +33384,7 @@ var init_store = __esm({
     path4 = __toESM(require("path"));
     os2 = __toESM(require("os"));
     crypto = __toESM(require("crypto"));
+    import_apache_arrow = require("apache-arrow");
     init_index_min();
     import_gray_matter2 = __toESM(require_gray_matter());
     import_md52 = __toESM(require_md5());
@@ -33293,6 +33395,19 @@ var init_store = __esm({
     LEGACY_STORAGE_DIR_NAME = ".gemini-obsidian";
     INDEX_LOCK_FILE_NAME = "index.lock";
     INDEX_METADATA_FILE_NAME = "index-metadata.json";
+    SCHEMA_VERSION_FILE_NAME = "schema-version.json";
+    NOTES_TABLE_NAME = "notes";
+    NOTES_TABLE_SCHEMA_VERSION = 2;
+    EMBEDDING_DIMENSIONS = 384;
+    FULL_REINDEX_REQUIRED_MESSAGE = "RAG index schema version changed. Run obsidian_rag_index with force_reindex=true to rebuild the local index.";
+    NOTES_TABLE_SCHEMA = new import_apache_arrow.Schema([
+      new import_apache_arrow.Field("id", new import_apache_arrow.Utf8(), false),
+      new import_apache_arrow.Field("path", new import_apache_arrow.Utf8(), false),
+      new import_apache_arrow.Field("text", new import_apache_arrow.Utf8(), false),
+      new import_apache_arrow.Field("vector", new import_apache_arrow.FixedSizeList(EMBEDDING_DIMENSIONS, new import_apache_arrow.Field("item", new import_apache_arrow.Float32(), false)), false),
+      new import_apache_arrow.Field("entities", new import_apache_arrow.List(new import_apache_arrow.Field("item", new import_apache_arrow.Utf8(), true)), false),
+      new import_apache_arrow.Field("communities", new import_apache_arrow.List(new import_apache_arrow.Field("item", new import_apache_arrow.Utf8(), true)), false)
+    ]);
     VaultIndexer = class {
       db = null;
       currentDbPath = null;
@@ -33354,8 +33469,9 @@ var init_store = __esm({
         const hashPath = path4.join(baseStorePath, "file-hashes.json");
         const lockPath = path4.join(baseStorePath, INDEX_LOCK_FILE_NAME);
         const metadataPath = path4.join(baseStorePath, INDEX_METADATA_FILE_NAME);
+        const schemaVersionPath = path4.join(baseStorePath, SCHEMA_VERSION_FILE_NAME);
         await fs5.mkdir(baseStorePath, { recursive: true });
-        return { dbPath, hashPath, lockPath, metadataPath };
+        return { dbPath, hashPath, lockPath, metadataPath, schemaVersionPath };
       }
       async getStorageRoot(storageParent) {
         const newRoot = path4.join(storageParent, STORAGE_DIR_NAME);
@@ -33386,8 +33502,8 @@ var init_store = __esm({
       async getTable(vaultPath, workspacePath, vaultId) {
         const db = await this.getDb(vaultPath, workspacePath, vaultId);
         const tableNames = await db.tableNames();
-        if (tableNames.includes("notes")) {
-          return await db.openTable("notes");
+        if (tableNames.includes(NOTES_TABLE_NAME)) {
+          return await db.openTable(NOTES_TABLE_NAME);
         }
         return null;
       }
@@ -33412,6 +33528,66 @@ var init_store = __esm({
         const tmpPath = `${filePath}.tmp`;
         await fs5.writeFile(tmpPath, JSON.stringify(value), "utf-8");
         await fs5.rename(tmpPath, filePath);
+      }
+      notesTableToArrow(chunks) {
+        return lancedb.makeArrowTable(chunks, {
+          schema: NOTES_TABLE_SCHEMA
+        });
+      }
+      async createNotesTable(db, chunks = []) {
+        return db.createTable(NOTES_TABLE_NAME, this.notesTableToArrow(chunks));
+      }
+      async addNoteChunks(table, chunks) {
+        if (chunks.length === 0) return;
+        await table.add(this.notesTableToArrow(chunks));
+      }
+      stringListColumnToArray(value) {
+        if (Array.isArray(value)) {
+          return value.filter((item) => typeof item === "string");
+        }
+        if (value && typeof value === "object" && typeof value.length === "number" && typeof value.get === "function") {
+          const vector = value;
+          const result = [];
+          for (let i = 0; i < vector.length; i++) {
+            const item = vector.get(i);
+            if (typeof item === "string") result.push(item);
+          }
+          return result;
+        }
+        return [];
+      }
+      normalizeSearchResults(rows) {
+        return rows.map((row) => {
+          const normalized = { ...row };
+          if ("entities" in row) {
+            normalized.entities = this.stringListColumnToArray(row.entities);
+          }
+          if ("communities" in row) {
+            normalized.communities = this.stringListColumnToArray(row.communities);
+          }
+          return normalized;
+        });
+      }
+      async readNotesSchemaVersion(schemaVersionPath) {
+        try {
+          const metadata = JSON.parse(await fs5.readFile(schemaVersionPath, "utf-8"));
+          return typeof metadata.notesTableSchemaVersion === "number" ? metadata.notesTableSchemaVersion : null;
+        } catch {
+          return null;
+        }
+      }
+      async writeNotesSchemaVersion(schemaVersionPath) {
+        await this.writeJsonAtomic(schemaVersionPath, {
+          notesTableSchemaVersion: NOTES_TABLE_SCHEMA_VERSION
+        });
+      }
+      async existingNotesTableRequiresReindex(db, schemaVersionPath) {
+        const tableNames = await db.tableNames();
+        if (!tableNames.includes(NOTES_TABLE_NAME)) return false;
+        return await this.readNotesSchemaVersion(schemaVersionPath) !== NOTES_TABLE_SCHEMA_VERSION;
+      }
+      fullReindexRequiredResult() {
+        return { success: false, message: FULL_REINDEX_REQUIRED_MESSAGE };
       }
       async listMarkdownFiles(vaultPath) {
         return Ze("**/*.md", { cwd: vaultPath, absolute: true, follow: true });
@@ -33605,73 +33781,76 @@ var init_store = __esm({
         }
         return recovered;
       }
+      prepareNoteChunks(relativePath, content) {
+        const contentHash = (0, import_md52.default)(content);
+        const { content: body, data: metadata } = (0, import_gray_matter2.default)(content);
+        const chunkingOptions = chunkingOptionsFromEnv();
+        chunkingOptions.graphMetadata = {
+          entities: normalizeToStringArray(metadata.entities),
+          communities: normalizeToStringArray(metadata.communities)
+        };
+        const { textsToEmbed, chunkMetadata } = buildEmbeddingInputs(relativePath, body, chunkingOptions);
+        return { contentHash, textsToEmbed, chunkMetadata };
+      }
+      async indexNoteIntoTable(table, embedder, vaultPath, relativePath, pathsToDelete) {
+        const normalizedPath = this.validatePath(relativePath);
+        const filePath = getSafeFilePath(vaultPath, normalizedPath);
+        const content = await fs5.readFile(filePath, "utf-8");
+        const { contentHash, textsToEmbed, chunkMetadata } = this.prepareNoteChunks(normalizedPath, content);
+        const deleteTargets = pathsToDelete ?? [normalizedPath];
+        if (textsToEmbed.length === 0) {
+          await this.deleteRowsForPaths(table, deleteTargets);
+          return {
+            success: true,
+            chunks: 0,
+            contentHash,
+            message: "File removed from index (no embeddable content)."
+          };
+        }
+        const chunks = await this.embedWithFallback(embedder, textsToEmbed, chunkMetadata);
+        if (chunks.length === 0) {
+          return { success: false, contentHash, message: `Failed to embed content for ${relativePath}.` };
+        }
+        await this.deleteRowsForPaths(table, deleteTargets);
+        await this.addNoteChunks(table, chunks);
+        return { success: true, chunks: chunks.length, contentHash };
+      }
       async indexFile(vaultPath, relativePath, workspacePath, vaultId) {
         const release = await this.acquireLock();
         let releaseIndexLock = null;
         try {
           const normalizedPath = this.validatePath(relativePath);
-          const { hashPath, lockPath, metadataPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+          const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
           releaseIndexLock = await this.acquireIndexLock(lockPath);
           const embedder = Embedder.getInstance();
           const filePath = getSafeFilePath(vaultPath, relativePath);
-          const content = await fs5.readFile(filePath, "utf-8");
-          const contentHash = (0, import_md52.default)(content);
-          const { content: body, data: metadata } = (0, import_gray_matter2.default)(content);
-          const chunkingOptions = chunkingOptionsFromEnv();
-          chunkingOptions.graphMetadata = {
-            entities: normalizeToStringArray(metadata.entities),
-            communities: normalizeToStringArray(metadata.communities)
-          };
-          const { textsToEmbed, chunkMetadata } = buildEmbeddingInputs(normalizedPath, body, chunkingOptions);
+          const db = await this.getDb(vaultPath, workspacePath, vaultId);
+          const tableNames = await db.tableNames();
+          if (await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
+            return this.fullReindexRequiredResult();
+          }
           let hashes = {};
           try {
             hashes = JSON.parse(await fs5.readFile(hashPath, "utf-8"));
           } catch {
           }
-          const db = await this.getDb(vaultPath, workspacePath, vaultId);
-          const tableNames = await db.tableNames();
-          if (textsToEmbed.length > 0) {
-            const chunks = await this.embedWithFallback(embedder, textsToEmbed, chunkMetadata);
-            if (chunks.length === 0) {
-              return { success: false, message: `Failed to embed content for ${relativePath}.` };
-            }
-            const chunkRows = chunks;
-            let table;
-            if (!tableNames.includes("notes")) {
-              table = await db.createTable("notes", chunkRows);
-              await this.ensureFtsIndex(table);
-            } else {
-              table = await db.openTable("notes");
-              const schema = await table.schema();
-              const hasEntities = schema.fields.some((f) => f.name === "entities");
-              if (!hasEntities) {
-                console.error("Schema mismatch detected (missing 'entities'). Recreating table...");
-                await db.dropTable("notes");
-                table = await db.createTable("notes", chunkRows);
-                await this.ensureFtsIndex(table);
-              } else {
-                await this.ensureFtsIndex(table);
-                await this.deleteRowsForPaths(table, [normalizedPath]);
-                await table.add(chunkRows);
-              }
-            }
-            await table.optimize();
-            hashes[normalizedPath] = contentHash;
-            await this.writeJsonAtomic(hashPath, hashes);
-            await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
-            console.error(`Indexed ${chunks.length} chunks for ${relativePath}.`);
-            return { success: true, chunks: chunks.length };
-          } else {
-            if (tableNames.includes("notes")) {
-              const table = await db.openTable("notes");
-              await this.deleteRowsForPaths(table, [normalizedPath]);
-              await table.optimize();
-            }
-            delete hashes[normalizedPath];
-            await this.writeJsonAtomic(hashPath, hashes);
-            await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
-            return { success: true, chunks: 0, message: "File removed from index (no embeddable content)." };
+          const table = tableNames.includes(NOTES_TABLE_NAME) ? await db.openTable(NOTES_TABLE_NAME) : await this.createNotesTable(db);
+          if (!tableNames.includes(NOTES_TABLE_NAME)) {
+            await this.writeNotesSchemaVersion(schemaVersionPath);
           }
+          await this.ensureFtsIndex(table);
+          const result = await this.indexNoteIntoTable(table, embedder, vaultPath, normalizedPath);
+          if (!result.success) return result;
+          await table.optimize();
+          if (result.chunks && result.chunks > 0) {
+            hashes[normalizedPath] = result.contentHash;
+            console.error(`Indexed ${result.chunks} chunks for ${relativePath}.`);
+          } else {
+            delete hashes[normalizedPath];
+          }
+          await this.writeJsonAtomic(hashPath, hashes);
+          await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
+          return { success: true, chunks: result.chunks, message: result.message };
         } catch (err) {
           console.error(`Failed to index file ${relativePath}:`, err);
           return { success: false, message: String(err) };
@@ -33686,7 +33865,7 @@ var init_store = __esm({
         const release = await this.acquireLock();
         let releaseIndexLock = null;
         try {
-          const { hashPath, lockPath, metadataPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+          const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
           releaseIndexLock = await this.acquireIndexLock(lockPath);
           const embedder = Embedder.getInstance();
           const db = await this.getDb(vaultPath, workspacePath, vaultId);
@@ -33702,18 +33881,28 @@ var init_store = __esm({
             }
           }
           const tableNames = await db.tableNames();
-          const tableExists = tableNames.includes("notes");
+          const tableExists = tableNames.includes(NOTES_TABLE_NAME);
           const hasPreviousHashes = Object.keys(previousHashes).length > 0;
-          let schemaCompatible = true;
-          if (tableExists && hasPreviousHashes && !force) {
-            const existingTable = await db.openTable("notes");
-            const schema = await existingTable.schema();
-            schemaCompatible = schema.fields.some((f) => f.name === "entities");
-            if (!schemaCompatible) {
-              console.error("Schema mismatch detected (missing 'entities'). Switching to full reindex.");
-            }
+          if (tableExists && !force && await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
+            return this.fullReindexRequiredResult();
           }
-          const canIncremental = tableExists && hasPreviousHashes && !force && schemaCompatible;
+          const canIncremental = tableExists && hasPreviousHashes && !force;
+          const currentHashes = canIncremental ? { ...previousHashes } : {};
+          const existingRelativePaths = /* @__PURE__ */ new Set();
+          for (const f of files) {
+            existingRelativePaths.add(path4.relative(vaultPath, f).replace(/\\/g, "/"));
+          }
+          const deletedPaths = canIncremental ? Object.keys(previousHashes).filter((p) => !existingRelativePaths.has(p)) : [];
+          let table;
+          if (canIncremental) {
+            table = await db.openTable(NOTES_TABLE_NAME);
+          } else {
+            if (tableExists) {
+              await db.dropTable(NOTES_TABLE_NAME);
+            }
+            table = await this.createNotesTable(db);
+            await this.writeNotesSchemaVersion(schemaVersionPath);
+          }
           const batchSizeRaw = getFirstNumericEnv(["OBSIDIAN_EMBED_BATCH_SIZE", "CODEX_OBSIDIAN_EMBED_BATCH_SIZE", "GEMINI_OBSIDIAN_EMBED_BATCH_SIZE"], 48);
           const batchSize = Number.isFinite(batchSizeRaw) && batchSizeRaw > 0 ? Math.min(Math.floor(batchSizeRaw), 256) : 48;
           const useProgressBar = process.stderr.isTTY === true;
@@ -33722,10 +33911,10 @@ var init_store = __esm({
           const allMeta = [];
           const changedHashes = {};
           const expectedChunkCounts = {};
-          const currentHashes = { ...previousHashes };
           const changedPaths = [];
           let filesRead = 0;
           let skippedFiles = 0;
+          let failedFiles = 0;
           const renderReadProgress = () => {
             if (files.length === 0) return;
             if (useProgressBar) {
@@ -33750,88 +33939,56 @@ var init_store = __esm({
               batch.map(async (filePath) => {
                 try {
                   const content = await fs5.readFile(filePath, "utf-8");
-                  const relativePathRaw = path4.relative(vaultPath, filePath);
-                  const relativePath = relativePathRaw.replace(/\\/g, "/");
+                  const relativePath = this.validatePath(path4.relative(vaultPath, filePath).replace(/\\/g, "/"));
                   const contentHash = (0, import_md52.default)(content);
                   if (canIncremental && previousHashes[relativePath] === contentHash) {
-                    return null;
+                    return "skipped";
                   }
-                  this.validatePath(relativePath);
+                  const inputs = this.prepareNoteChunks(relativePath, content);
                   changedHashes[relativePath] = contentHash;
                   changedPaths.push(relativePath);
-                  const { content: body, data: metadata } = (0, import_gray_matter2.default)(content);
-                  const chunkingOptions = chunkingOptionsFromEnv();
-                  chunkingOptions.graphMetadata = {
-                    entities: normalizeToStringArray(metadata.entities),
-                    communities: normalizeToStringArray(metadata.communities)
-                  };
-                  const inputs = buildEmbeddingInputs(relativePath, body, chunkingOptions);
                   if (inputs.textsToEmbed.length > 0) {
                     expectedChunkCounts[relativePath] = inputs.textsToEmbed.length;
                     return inputs;
-                  } else {
-                    currentHashes[relativePath] = contentHash;
-                    return null;
                   }
+                  currentHashes[relativePath] = inputs.contentHash;
+                  return "empty";
                 } catch (err) {
                   console.error(`Failed to process file ${filePath}:`, err);
-                  return null;
+                  return "failed";
                 }
               })
             );
             for (const result of results) {
-              if (result) {
+              if (result === "skipped") {
+                skippedFiles++;
+              } else if (result === "failed") {
+                failedFiles++;
+              } else if (result !== "empty") {
                 for (let j2 = 0; j2 < result.textsToEmbed.length; j2++) {
                   allTexts.push(result.textsToEmbed[j2]);
                   allMeta.push(result.chunkMetadata[j2]);
                 }
-              } else {
-                skippedFiles++;
               }
             }
             filesRead += batch.length;
             renderReadProgress();
           }
-          const existingRelativePaths = /* @__PURE__ */ new Set();
-          for (const f of files) {
-            existingRelativePaths.add(path4.relative(vaultPath, f).replace(/\\/g, "/"));
-          }
-          const deletedPaths = Object.keys(previousHashes).filter((p) => !existingRelativePaths.has(p));
           if (canIncremental) {
             console.error(`Incremental: ${changedPaths.length} changed, ${deletedPaths.length} deleted, ${skippedFiles} unchanged`);
           } else {
             console.error(`Full index: ${allTexts.length} chunks from ${files.length} files`);
           }
-          if (canIncremental && allTexts.length === 0 && deletedPaths.length === 0) {
-            console.error("Index is up to date, no changes detected.");
-            await this.writeJsonAtomic(hashPath, currentHashes);
-            await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
-            return { success: true, chunks: 0, message: "Index up to date, no changes detected." };
-          }
-          if (!canIncremental && allTexts.length === 0) {
-            return { success: false, message: "No content found to index." };
+          if (canIncremental) {
+            const pathsToDelete = [...changedPaths, ...deletedPaths];
+            const DELETE_BATCH = 100;
+            for (let i = 0; i < pathsToDelete.length; i += DELETE_BATCH) {
+              await this.deleteRowsForPaths(table, pathsToDelete.slice(i, i + DELETE_BATCH));
+            }
+            for (const p of deletedPaths) delete currentHashes[p];
           }
           let indexedChunks = 0;
-          let tableInitialized = false;
-          let table = null;
           const persistedChunkCounts = {};
-          const resetTableOnFullReindex = !canIncremental && tableExists;
-          if (canIncremental) {
-            table = await db.openTable("notes");
-            await this.ensureFtsIndex(table);
-            const pathsToDelete = [...changedPaths, ...deletedPaths];
-            if (pathsToDelete.length > 0) {
-              const DELETE_BATCH = 100;
-              for (let i = 0; i < pathsToDelete.length; i += DELETE_BATCH) {
-                const batch = pathsToDelete.slice(i, i + DELETE_BATCH);
-                await this.deleteRowsForPaths(table, batch);
-              }
-            }
-            tableInitialized = true;
-            for (const p of deletedPaths) delete currentHashes[p];
-          } else {
-            for (const k2 in currentHashes) delete currentHashes[k2];
-          }
           if (allTexts.length > 0) {
             const sortedIndices = allTexts.map((_2, i) => i);
             sortedIndices.sort((a, b) => allTexts[a].length - allTexts[b].length);
@@ -33858,28 +34015,13 @@ var init_store = __esm({
             };
             const persistChunks = async (chunks) => {
               if (chunks.length === 0) return;
-              const chunkRows = chunks;
-              if (!tableInitialized) {
-                if (resetTableOnFullReindex) {
-                  await db.dropTable("notes");
-                }
-                table = await db.createTable("notes", chunkRows);
-                await this.ensureFtsIndex(table);
-                tableInitialized = true;
-              } else {
-                if (!table) {
-                  table = await db.openTable("notes");
-                }
-                await table.add(chunkRows);
-              }
+              await this.addNoteChunks(table, chunks);
               indexedChunks += chunks.length;
               for (const c of chunks) {
                 const p = c.path;
                 persistedChunkCounts[p] = (persistedChunkCounts[p] || 0) + 1;
-                if (persistedChunkCounts[p] === expectedChunkCounts[p]) {
-                  if (changedHashes[p]) {
-                    currentHashes[p] = changedHashes[p];
-                  }
+                if (persistedChunkCounts[p] === expectedChunkCounts[p] && changedHashes[p]) {
+                  currentHashes[p] = changedHashes[p];
                 }
               }
             };
@@ -33908,10 +34050,25 @@ var init_store = __esm({
               await persistChunks(pendingChunks);
             }
           }
-          if (table) {
-            await table.optimize();
+          for (const p of Object.keys(expectedChunkCounts)) {
+            if (persistedChunkCounts[p] !== expectedChunkCounts[p]) failedFiles++;
           }
+          await this.ensureFtsIndex(table);
+          if (canIncremental && changedPaths.length === 0 && deletedPaths.length === 0 && failedFiles === 0) {
+            console.error("Index is up to date, no changes detected.");
+            await this.writeJsonAtomic(hashPath, currentHashes);
+            await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
+            return { success: true, chunks: 0, message: "Index up to date, no changes detected." };
+          }
+          await table.optimize();
           await this.writeJsonAtomic(hashPath, currentHashes);
+          if (failedFiles > 0) {
+            return {
+              success: false,
+              chunks: indexedChunks,
+              message: `Failed to index ${failedFiles} file(s).`
+            };
+          }
           await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
           if (canIncremental) {
             console.error(`Incremental update: ${indexedChunks} chunks embedded, ${deletedPaths.length} files removed.`);
@@ -33932,74 +34089,40 @@ var init_store = __esm({
         try {
           const sourcePath = this.validatePath(sourceRelativePath);
           const destPath = this.validatePath(destRelativePath);
-          const { hashPath, lockPath, metadataPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+          const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
           releaseIndexLock = await this.acquireIndexLock(lockPath);
           const embedder = Embedder.getInstance();
           const filePath = getSafeFilePath(vaultPath, destRelativePath);
-          const content = await fs5.readFile(filePath, "utf-8");
-          const contentHash = (0, import_md52.default)(content);
-          const { content: body, data: metadata } = (0, import_gray_matter2.default)(content);
-          const chunkingOptions = chunkingOptionsFromEnv();
-          chunkingOptions.graphMetadata = {
-            entities: normalizeToStringArray(metadata.entities),
-            communities: normalizeToStringArray(metadata.communities)
-          };
-          const { textsToEmbed, chunkMetadata } = buildEmbeddingInputs(destPath, body, chunkingOptions);
-          const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];
+          const db = await this.getDb(vaultPath, workspacePath, vaultId);
+          const tableNames = await db.tableNames();
+          if (await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
+            return this.fullReindexRequiredResult();
+          }
           let hashes = {};
           try {
             hashes = JSON.parse(await fs5.readFile(hashPath, "utf-8"));
           } catch {
           }
-          const db = await this.getDb(vaultPath, workspacePath, vaultId);
-          const tableNames = await db.tableNames();
-          const hasTable = tableNames.includes("notes");
-          if (textsToEmbed.length === 0) {
-            if (hasTable) {
-              const table2 = await db.openTable("notes");
-              await this.deleteRowsForPaths(table2, pathsToDelete);
-              await table2.optimize();
-            }
-            delete hashes[sourcePath];
-            hashes[destPath] = contentHash;
-            await this.writeJsonAtomic(hashPath, hashes);
-            await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
-            return { success: true, chunks: 0, message: "Moved file has no embeddable content." };
+          const table = tableNames.includes(NOTES_TABLE_NAME) ? await db.openTable(NOTES_TABLE_NAME) : await this.createNotesTable(db);
+          if (!tableNames.includes(NOTES_TABLE_NAME)) {
+            await this.writeNotesSchemaVersion(schemaVersionPath);
           }
-          const chunks = await this.embedWithFallback(embedder, textsToEmbed, chunkMetadata);
-          if (chunks.length === 0) {
-            return { success: false, message: `Failed to embed content for ${destRelativePath}.` };
-          }
-          const chunkRows = chunks;
-          let table;
-          if (!hasTable) {
-            table = await db.createTable("notes", chunkRows);
-            await this.ensureFtsIndex(table);
-          } else {
-            table = await db.openTable("notes");
-            const schema = await table.schema();
-            const hasEntities = schema.fields.some((f) => f.name === "entities");
-            if (!hasEntities) {
-              console.error("Schema mismatch detected (missing 'entities'). Recreating table...");
-              await db.dropTable("notes");
-              table = await db.createTable("notes", chunkRows);
-              await this.ensureFtsIndex(table);
-            } else {
-              await this.ensureFtsIndex(table);
-              await this.deleteRowsForPaths(table, [destPath]);
-              await table.add(chunkRows);
-              if (sourcePath !== destPath) {
-                await this.deleteRowsForPaths(table, [sourcePath]);
-              }
-            }
-          }
+          await this.ensureFtsIndex(table);
+          const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];
+          const result = await this.indexNoteIntoTable(table, embedder, vaultPath, destPath, pathsToDelete);
+          if (!result.success) return result;
           await table.optimize();
           delete hashes[sourcePath];
-          hashes[destPath] = contentHash;
+          if (result.contentHash) {
+            hashes[destPath] = result.contentHash;
+          }
           await this.writeJsonAtomic(hashPath, hashes);
           await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
-          console.error(`Moved index entry from ${sourceRelativePath} to ${destRelativePath} (${chunks.length} chunks).`);
-          return { success: true, chunks: chunks.length };
+          if ((result.chunks ?? 0) === 0) {
+            return { success: true, chunks: 0, message: "Moved file has no embeddable content." };
+          }
+          console.error(`Moved index entry from ${sourceRelativePath} to ${destRelativePath} (${result.chunks} chunks).`);
+          return { success: true, chunks: result.chunks };
         } catch (err) {
           console.error(`Failed to move indexed file ${sourceRelativePath} to ${destRelativePath}:`, err);
           return { success: false, message: String(err) };
@@ -34039,11 +34162,11 @@ var init_store = __esm({
           const vector = await embedder.embed(query);
           try {
             const results = await table.search(vector).fullTextSearch(query).limit(limit).toArray();
-            return results;
+            return this.normalizeSearchResults(results);
           } catch (err) {
             console.error("FTS Hybrid Search failed, falling back to vector search. Consider running a full re-index.", err);
             const results = await table.vectorSearch(vector).limit(limit).toArray();
-            return results;
+            return this.normalizeSearchResults(results);
           }
         } finally {
           release();
@@ -34152,8 +34275,15 @@ async function reindexMovedNote(context, vaultPath, sourceRelativePath, destRela
     vaultId
   );
   if (!result.success) {
+    const message = result.message ?? "unknown error";
+    if (message.includes("force_reindex=true")) {
+      console.error(
+        `Post-move reindex skipped for ${sourceRelativePath} -> ${destRelativePath}: ${message}`
+      );
+      return;
+    }
     throw new Error(
-      `Post-move reindex failed for ${sourceRelativePath} -> ${destRelativePath}: ${result.message ?? "unknown error"}`
+      `Post-move reindex failed for ${sourceRelativePath} -> ${destRelativePath}: ${message}`
     );
   }
 }
@@ -35083,6 +35213,7 @@ function assertNativeDependencies() {
   try {
     require.resolve("@lancedb/lancedb");
     require.resolve("@huggingface/transformers");
+    require.resolve("apache-arrow");
   } catch {
     console.error(
       "\n[Obsidian MCP] Error: Required native dependencies are missing."

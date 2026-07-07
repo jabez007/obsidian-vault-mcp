@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import { Field, FixedSizeList, Float32, List, Schema, Utf8 } from 'apache-arrow';
 import { glob } from 'glob';
 import matter from 'gray-matter';
 import md5 from 'md5';
@@ -64,6 +65,29 @@ interface IndexMetadata {
 
 const INDEX_LOCK_FILE_NAME = 'index.lock';
 const INDEX_METADATA_FILE_NAME = 'index-metadata.json';
+const SCHEMA_VERSION_FILE_NAME = 'schema-version.json';
+const NOTES_TABLE_NAME = 'notes';
+const NOTES_TABLE_SCHEMA_VERSION = 2;
+const EMBEDDING_DIMENSIONS = 384;
+const FULL_REINDEX_REQUIRED_MESSAGE =
+  'RAG index schema version changed. Run obsidian_rag_index with force_reindex=true to rebuild the local index.';
+
+const NOTES_TABLE_SCHEMA = new Schema([
+  new Field('id', new Utf8(), false),
+  new Field('path', new Utf8(), false),
+  new Field('text', new Utf8(), false),
+  new Field('vector', new FixedSizeList(EMBEDDING_DIMENSIONS, new Field('item', new Float32(), false)), false),
+  new Field('entities', new List(new Field('item', new Utf8(), true)), false),
+  new Field('communities', new List(new Field('item', new Utf8(), true)), false),
+]);
+
+interface NotesSchemaVersionMetadata {
+  notesTableSchemaVersion: number;
+}
+
+interface NoteIndexResult extends IndexResult {
+  contentHash?: string;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -145,11 +169,12 @@ export class VaultIndexer {
     const hashPath = path.join(baseStorePath, 'file-hashes.json');
     const lockPath = path.join(baseStorePath, INDEX_LOCK_FILE_NAME);
     const metadataPath = path.join(baseStorePath, INDEX_METADATA_FILE_NAME);
+    const schemaVersionPath = path.join(baseStorePath, SCHEMA_VERSION_FILE_NAME);
 
     // Ensure the storage directory exists
     await fs.mkdir(baseStorePath, { recursive: true });
     
-    return { dbPath, hashPath, lockPath, metadataPath };
+    return { dbPath, hashPath, lockPath, metadataPath, schemaVersionPath };
   }
 
   private async getStorageRoot(storageParent: string): Promise<string> {
@@ -189,8 +214,8 @@ export class VaultIndexer {
   private async getTable(vaultPath: string, workspacePath?: string | null, vaultId?: string | null) {
     const db = await this.getDb(vaultPath, workspacePath, vaultId);
     const tableNames = await db.tableNames();
-    if (tableNames.includes('notes')) {
-      return await db.openTable('notes');
+    if (tableNames.includes(NOTES_TABLE_NAME)) {
+      return await db.openTable(NOTES_TABLE_NAME);
     }
     return null;
   }
@@ -218,6 +243,84 @@ export class VaultIndexer {
     const tmpPath = `${filePath}.tmp`;
     await fs.writeFile(tmpPath, JSON.stringify(value), 'utf-8');
     await fs.rename(tmpPath, filePath);
+  }
+
+  private notesTableToArrow(chunks: NoteChunk[]) {
+    return lancedb.makeArrowTable(chunks as unknown as Array<Record<string, unknown>>, {
+      schema: NOTES_TABLE_SCHEMA,
+    });
+  }
+
+  private async createNotesTable(db: lancedb.Connection, chunks: NoteChunk[] = []): Promise<lancedb.Table> {
+    return db.createTable(NOTES_TABLE_NAME, this.notesTableToArrow(chunks));
+  }
+
+  private async addNoteChunks(table: lancedb.Table, chunks: NoteChunk[]) {
+    if (chunks.length === 0) return;
+    await table.add(this.notesTableToArrow(chunks));
+  }
+
+  private stringListColumnToArray(value: unknown): string[] {
+    if (Array.isArray(value)) {
+      return value.filter((item): item is string => typeof item === 'string');
+    }
+
+    if (
+      value &&
+      typeof value === 'object' &&
+      typeof (value as { length?: unknown }).length === 'number' &&
+      typeof (value as { get?: unknown }).get === 'function'
+    ) {
+      const vector = value as { length: number; get(index: number): unknown };
+      const result: string[] = [];
+      for (let i = 0; i < vector.length; i++) {
+        const item = vector.get(i);
+        if (typeof item === 'string') result.push(item);
+      }
+      return result;
+    }
+
+    return [];
+  }
+
+  private normalizeSearchResults(rows: Array<Record<string, unknown>>) {
+    return rows.map((row) => {
+      const normalized = { ...row };
+      if ('entities' in row) {
+        normalized.entities = this.stringListColumnToArray(row.entities);
+      }
+      if ('communities' in row) {
+        normalized.communities = this.stringListColumnToArray(row.communities);
+      }
+      return normalized;
+    });
+  }
+
+  private async readNotesSchemaVersion(schemaVersionPath: string): Promise<number | null> {
+    try {
+      const metadata = JSON.parse(await fs.readFile(schemaVersionPath, 'utf-8')) as Partial<NotesSchemaVersionMetadata>;
+      return typeof metadata.notesTableSchemaVersion === 'number'
+        ? metadata.notesTableSchemaVersion
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async writeNotesSchemaVersion(schemaVersionPath: string) {
+    await this.writeJsonAtomic(schemaVersionPath, {
+      notesTableSchemaVersion: NOTES_TABLE_SCHEMA_VERSION,
+    } satisfies NotesSchemaVersionMetadata);
+  }
+
+  private async existingNotesTableRequiresReindex(db: lancedb.Connection, schemaVersionPath: string): Promise<boolean> {
+    const tableNames = await db.tableNames();
+    if (!tableNames.includes(NOTES_TABLE_NAME)) return false;
+    return (await this.readNotesSchemaVersion(schemaVersionPath)) !== NOTES_TABLE_SCHEMA_VERSION;
+  }
+
+  private fullReindexRequiredResult(): IndexResult {
+    return { success: false, message: FULL_REINDEX_REQUIRED_MESSAGE };
   }
 
   private async listMarkdownFiles(vaultPath: string): Promise<string[]> {
@@ -448,27 +551,72 @@ export class VaultIndexer {
     return recovered;
   }
 
+  private prepareNoteChunks(relativePath: string, content: string): {
+    contentHash: string;
+    textsToEmbed: string[];
+    chunkMetadata: NoteMetadata[];
+  } {
+    const contentHash = md5(content);
+    const { content: body, data: metadata } = matter(content);
+
+    const chunkingOptions = chunkingOptionsFromEnv();
+    chunkingOptions.graphMetadata = {
+      entities: normalizeToStringArray(metadata.entities),
+      communities: normalizeToStringArray(metadata.communities),
+    };
+
+    const { textsToEmbed, chunkMetadata } = buildEmbeddingInputs(relativePath, body, chunkingOptions);
+    return { contentHash, textsToEmbed, chunkMetadata };
+  }
+
+  private async indexNoteIntoTable(
+    table: lancedb.Table,
+    embedder: Embedder,
+    vaultPath: string,
+    relativePath: string,
+    pathsToDelete?: string[],
+  ): Promise<NoteIndexResult> {
+    const normalizedPath = this.validatePath(relativePath);
+    const filePath = getSafeFilePath(vaultPath, normalizedPath);
+    const content = await fs.readFile(filePath, 'utf-8');
+    const { contentHash, textsToEmbed, chunkMetadata } = this.prepareNoteChunks(normalizedPath, content);
+    const deleteTargets = pathsToDelete ?? [normalizedPath];
+
+    if (textsToEmbed.length === 0) {
+      await this.deleteRowsForPaths(table, deleteTargets);
+      return {
+        success: true,
+        chunks: 0,
+        contentHash,
+        message: 'File removed from index (no embeddable content).',
+      };
+    }
+
+    const chunks = await this.embedWithFallback(embedder, textsToEmbed, chunkMetadata);
+    if (chunks.length === 0) {
+      return { success: false, contentHash, message: `Failed to embed content for ${relativePath}.` };
+    }
+
+    await this.deleteRowsForPaths(table, deleteTargets);
+    await this.addNoteChunks(table, chunks);
+    return { success: true, chunks: chunks.length, contentHash };
+  }
+
   public async indexFile(vaultPath: string, relativePath: string, workspacePath?: string | null, vaultId?: string | null): Promise<IndexResult> {
     const release = await this.acquireLock();
     let releaseIndexLock: (() => Promise<void>) | null = null;
     try {
       const normalizedPath = this.validatePath(relativePath);
-      const { hashPath, lockPath, metadataPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+      const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
       releaseIndexLock = await this.acquireIndexLock(lockPath);
       const embedder = Embedder.getInstance();
       const filePath = getSafeFilePath(vaultPath, relativePath);
+      const db = await this.getDb(vaultPath, workspacePath, vaultId);
+      const tableNames = await db.tableNames();
 
-      const content = await fs.readFile(filePath, 'utf-8');
-      const contentHash = md5(content);
-      const { content: body, data: metadata } = matter(content);
-
-      const chunkingOptions = chunkingOptionsFromEnv();
-      chunkingOptions.graphMetadata = {
-        entities: normalizeToStringArray(metadata.entities),
-        communities: normalizeToStringArray(metadata.communities)
-      };
-
-      const { textsToEmbed, chunkMetadata } = buildEmbeddingInputs(normalizedPath, body, chunkingOptions);
+      if (await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
+        return this.fullReindexRequiredResult();
+      }
 
       // Load hashes to update
       let hashes: Record<string, string> = {};
@@ -476,56 +624,27 @@ export class VaultIndexer {
           hashes = JSON.parse(await fs.readFile(hashPath, 'utf-8'));
       } catch { /* ignore */ }
 
-      const db = await this.getDb(vaultPath, workspacePath, vaultId);
-      const tableNames = await db.tableNames();
-
-      if (textsToEmbed.length > 0) {
-          const chunks = await this.embedWithFallback(embedder, textsToEmbed, chunkMetadata);
-          if (chunks.length === 0) {
-              return { success: false, message: `Failed to embed content for ${relativePath}.` };
-          }
-          const chunkRows = chunks as unknown as Record<string, unknown>[];
-
-          let table: lancedb.Table;
-          if (!tableNames.includes('notes')) {
-              table = await db.createTable('notes', chunkRows);
-              await this.ensureFtsIndex(table);
-          } else {
-              table = await db.openTable('notes');
-              const schema = await table.schema();
-              const hasEntities = schema.fields.some(f => f.name === 'entities');
-              
-              if (!hasEntities) {
-                  console.error("Schema mismatch detected (missing 'entities'). Recreating table...");
-                  await db.dropTable('notes');
-                  table = await db.createTable('notes', chunkRows);
-                  await this.ensureFtsIndex(table);
-              } else {
-                  await this.ensureFtsIndex(table);
-                  // Delete old chunks for this file
-                  await this.deleteRowsForPaths(table, [normalizedPath]);
-                  await table.add(chunkRows);
-              }
-          }
-          await table.optimize();
-          
-          hashes[normalizedPath] = contentHash;
-          await this.writeJsonAtomic(hashPath, hashes);
-          await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
-          console.error(`Indexed ${chunks.length} chunks for ${relativePath}.`);
-          return { success: true, chunks: chunks.length };
-      } else {
-          // No chunks: Remove from DB and hashes
-          if (tableNames.includes('notes')) {
-              const table = await db.openTable('notes');
-              await this.deleteRowsForPaths(table, [normalizedPath]);
-              await table.optimize();
-          }
-          delete hashes[normalizedPath];
-          await this.writeJsonAtomic(hashPath, hashes);
-          await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
-          return { success: true, chunks: 0, message: "File removed from index (no embeddable content)." };
+      const table = tableNames.includes(NOTES_TABLE_NAME)
+        ? await db.openTable(NOTES_TABLE_NAME)
+        : await this.createNotesTable(db);
+      if (!tableNames.includes(NOTES_TABLE_NAME)) {
+        await this.writeNotesSchemaVersion(schemaVersionPath);
       }
+      await this.ensureFtsIndex(table);
+
+      const result = await this.indexNoteIntoTable(table, embedder, vaultPath, normalizedPath);
+      if (!result.success) return result;
+
+      await table.optimize();
+      if (result.chunks && result.chunks > 0) {
+        hashes[normalizedPath] = result.contentHash!;
+        console.error(`Indexed ${result.chunks} chunks for ${relativePath}.`);
+      } else {
+        delete hashes[normalizedPath];
+      }
+      await this.writeJsonAtomic(hashPath, hashes);
+      await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
+      return { success: true, chunks: result.chunks, message: result.message };
     } catch (err) {
       console.error(`Failed to index file ${relativePath}:`, err);
       return { success: false, message: String(err) };
@@ -541,7 +660,7 @@ export class VaultIndexer {
     const release = await this.acquireLock();
     let releaseIndexLock: (() => Promise<void>) | null = null;
     try {
-      const { hashPath, lockPath, metadataPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+      const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
       releaseIndexLock = await this.acquireIndexLock(lockPath);
       const embedder = Embedder.getInstance();
       const db = await this.getDb(vaultPath, workspacePath, vaultId);
@@ -564,36 +683,48 @@ export class VaultIndexer {
       }
 
       const tableNames = await db.tableNames();
-      const tableExists = tableNames.includes('notes');
+      const tableExists = tableNames.includes(NOTES_TABLE_NAME);
       const hasPreviousHashes = Object.keys(previousHashes).length > 0;
-      // Check schema compatibility up front so a legacy table (missing the
-      // 'entities' column) downgrades to a full reindex before Phase 1 skips
-      // unchanged files.
-      let schemaCompatible = true;
-      if (tableExists && hasPreviousHashes && !force) {
-        const existingTable = await db.openTable('notes');
-        const schema = await existingTable.schema();
-        schemaCompatible = schema.fields.some(f => f.name === 'entities');
-        if (!schemaCompatible) {
-          console.error("Schema mismatch detected (missing 'entities'). Switching to full reindex.");
-        }
+      if (tableExists && !force && await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
+        return this.fullReindexRequiredResult();
       }
-      const canIncremental = tableExists && hasPreviousHashes && !force && schemaCompatible;
+      const canIncremental = tableExists && hasPreviousHashes && !force;
+      const currentHashes: Record<string, string> = canIncremental ? { ...previousHashes } : {};
+
+      // Determine deleted files (in previous hashes but not in current file set)
+      const existingRelativePaths = new Set<string>();
+      for (const f of files) {
+          existingRelativePaths.add(path.relative(vaultPath, f).replace(/\\/g, '/'));
+      }
+      const deletedPaths = canIncremental
+        ? Object.keys(previousHashes).filter(p => !existingRelativePaths.has(p))
+        : [];
+
+      let table: lancedb.Table;
+      if (canIncremental) {
+        table = await db.openTable(NOTES_TABLE_NAME);
+      } else {
+        if (tableExists) {
+          await db.dropTable(NOTES_TABLE_NAME);
+        }
+        table = await this.createNotesTable(db);
+        await this.writeNotesSchemaVersion(schemaVersionPath);
+      }
 
       const batchSizeRaw = getFirstNumericEnv(['OBSIDIAN_EMBED_BATCH_SIZE', 'CODEX_OBSIDIAN_EMBED_BATCH_SIZE', 'GEMINI_OBSIDIAN_EMBED_BATCH_SIZE'], 48);
       const batchSize = Number.isFinite(batchSizeRaw) && batchSizeRaw > 0 ? Math.min(Math.floor(batchSizeRaw), 256) : 48;
       const useProgressBar = process.stderr.isTTY === true;
       const progressInterval = 100;
 
-      // ── Phase 1: Read all files, compute hashes, build chunks for changed files ──
+      // ── Phase 1: read files concurrently, hash, chunk the changed ones ──
       const allTexts: string[] = [];
       const allMeta: NoteMetadata[] = [];
-      const changedHashes: Record<string, string> = {}; // Hashes of files we are attempting to index
-      const expectedChunkCounts: Record<string, number> = {}; // Expected total chunks per file
-      const currentHashes: Record<string, string> = { ...previousHashes }; // Start with old hashes
+      const changedHashes: Record<string, string> = {};
+      const expectedChunkCounts: Record<string, number> = {};
       const changedPaths: string[] = [];
       let filesRead = 0;
       let skippedFiles = 0;
+      let failedFiles = 0;
 
       const renderReadProgress = () => {
         if (files.length === 0) return;
@@ -620,50 +751,42 @@ export class VaultIndexer {
           batch.map(async (filePath) => {
             try {
               const content = await fs.readFile(filePath, 'utf-8');
-              const relativePathRaw = path.relative(vaultPath, filePath);
-              const relativePath = relativePathRaw.replace(/\\/g, '/');
+              const relativePath = this.validatePath(path.relative(vaultPath, filePath).replace(/\\/g, '/'));
               const contentHash = md5(content);
 
-              // Skip unchanged files in incremental mode
               if (canIncremental && previousHashes[relativePath] === contentHash) {
-                return null;
+                return 'skipped' as const;
               }
 
-              this.validatePath(relativePath);
+              const inputs = this.prepareNoteChunks(relativePath, content);
               changedHashes[relativePath] = contentHash;
               changedPaths.push(relativePath);
-              const { content: body, data: metadata } = matter(content);
-              const chunkingOptions = chunkingOptionsFromEnv();
-              chunkingOptions.graphMetadata = {
-                entities: normalizeToStringArray(metadata.entities),
-                communities: normalizeToStringArray(metadata.communities)
-              };
-              const inputs = buildEmbeddingInputs(relativePath, body, chunkingOptions);
-              
               if (inputs.textsToEmbed.length > 0) {
                 expectedChunkCounts[relativePath] = inputs.textsToEmbed.length;
                 return inputs;
-              } else {
-                // File has no embeddable content (too short or empty)
-                // Mark it as done immediately so we don't keep trying to index it
-                currentHashes[relativePath] = contentHash;
-                return null;
               }
+              // No embeddable content: nothing to add, and the incremental
+              // delete pass below removes any stale rows. Record the hash
+              // immediately so we do not keep reprocessing the file.
+              currentHashes[relativePath] = inputs.contentHash;
+              return 'empty' as const;
             } catch (err) {
               console.error(`Failed to process file ${filePath}:`, err);
-              return null;
+              return 'failed' as const;
             }
           })
         );
 
         for (const result of results) {
-          if (result) {
+          if (result === 'skipped') {
+            skippedFiles++;
+          } else if (result === 'failed') {
+            failedFiles++;
+          } else if (result !== 'empty') {
             for (let j = 0; j < result.textsToEmbed.length; j++) {
               allTexts.push(result.textsToEmbed[j]);
               allMeta.push(result.chunkMetadata[j]);
             }
-          } else {
-            skippedFiles++;
           }
         }
 
@@ -671,59 +794,27 @@ export class VaultIndexer {
         renderReadProgress();
       }
 
-      // Determine deleted files (in previous hashes but not in current file set)
-      const existingRelativePaths = new Set<string>();
-      for (const f of files) {
-          existingRelativePaths.add(path.relative(vaultPath, f).replace(/\\/g, '/'));
-      }
-      const deletedPaths = Object.keys(previousHashes).filter(p => !existingRelativePaths.has(p));
-
       if (canIncremental) {
         console.error(`Incremental: ${changedPaths.length} changed, ${deletedPaths.length} deleted, ${skippedFiles} unchanged`);
       } else {
         console.error(`Full index: ${allTexts.length} chunks from ${files.length} files`);
       }
 
-      // Early exit: nothing changed
-      if (canIncremental && allTexts.length === 0 && deletedPaths.length === 0) {
-        console.error('Index is up to date, no changes detected.');
-        await this.writeJsonAtomic(hashPath, currentHashes);
-        await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
-        return { success: true, chunks: 0, message: 'Index up to date, no changes detected.' };
-      }
-
-      if (!canIncremental && allTexts.length === 0) {
-        return { success: false, message: "No content found to index." };
-      }
-
-      // ── Phase 2: Update index ─────────────────────────────────────────
-
-      let indexedChunks = 0;
-      let tableInitialized = false;
-      let table: lancedb.Table | null = null;
-      const persistedChunkCounts: Record<string, number> = {};
-      const resetTableOnFullReindex = !canIncremental && tableExists;
-
-      // For incremental mode: delete old chunks for changed/deleted files, keep existing table
+      // Incremental: remove old rows for changed/deleted files. A full
+      // reindex starts from a freshly created table, so nothing to delete.
       if (canIncremental) {
-        table = await db.openTable('notes');
-        await this.ensureFtsIndex(table);
-
         const pathsToDelete = [...changedPaths, ...deletedPaths];
-        if (pathsToDelete.length > 0) {
-          const DELETE_BATCH = 100;
-          for (let i = 0; i < pathsToDelete.length; i += DELETE_BATCH) {
-            const batch = pathsToDelete.slice(i, i + DELETE_BATCH);
-            await this.deleteRowsForPaths(table, batch);
-          }
+        const DELETE_BATCH = 100;
+        for (let i = 0; i < pathsToDelete.length; i += DELETE_BATCH) {
+          await this.deleteRowsForPaths(table, pathsToDelete.slice(i, i + DELETE_BATCH));
         }
-        tableInitialized = true;
         for (const p of deletedPaths) delete currentHashes[p];
-      } else {
-          for (const k in currentHashes) delete currentHashes[k];
       }
 
-      // Embed new/changed chunks (or all chunks for full reindex)
+      // ── Phase 2: embed changed chunks in length-sorted batches ──
+      let indexedChunks = 0;
+      const persistedChunkCounts: Record<string, number> = {};
+
       if (allTexts.length > 0) {
         // Sort chunks by text length to reduce ONNX padding waste
         const sortedIndices = allTexts.map((_, i) => i);
@@ -754,34 +845,17 @@ export class VaultIndexer {
 
         const persistChunks = async (chunks: NoteChunk[]) => {
           if (chunks.length === 0) return;
-          const chunkRows = chunks as unknown as Record<string, unknown>[];
-
-          if (!tableInitialized) {
-            // Only reachable on a full reindex: either no table exists yet, or
-            // the stale one must be dropped before the first write.
-            if (resetTableOnFullReindex) {
-              await db.dropTable('notes');
-            }
-            table = await db.createTable('notes', chunkRows);
-            await this.ensureFtsIndex(table);
-            tableInitialized = true;
-          } else {
-            if (!table) {
-              table = await db.openTable('notes');
-            }
-            await table.add(chunkRows);
-          }
-
+          await this.addNoteChunks(table, chunks);
           indexedChunks += chunks.length;
-          
+
+          // A file's hash is recorded only once every one of its chunks has
+          // been persisted, so partially indexed files are retried next run.
           for (const c of chunks) {
-              const p = c.path;
-              persistedChunkCounts[p] = (persistedChunkCounts[p] || 0) + 1;
-              if (persistedChunkCounts[p] === expectedChunkCounts[p]) {
-                  if (changedHashes[p]) {
-                      currentHashes[p] = changedHashes[p];
-                  }
-              }
+            const p = c.path;
+            persistedChunkCounts[p] = (persistedChunkCounts[p] || 0) + 1;
+            if (persistedChunkCounts[p] === expectedChunkCounts[p] && changedHashes[p]) {
+              currentHashes[p] = changedHashes[p];
+            }
           }
         };
 
@@ -816,13 +890,40 @@ export class VaultIndexer {
         }
       }
 
-      // Compact fragments and clean up old versions to prevent stale references
-      if (table) {
-        await table.optimize();
+      // Files whose chunks did not all persist (embedding failures) count as
+      // failed; their hashes were never recorded, so the next run retries them.
+      for (const p of Object.keys(expectedChunkCounts)) {
+        if (persistedChunkCounts[p] !== expectedChunkCounts[p]) failedFiles++;
       }
 
-      // Save updated hashes
+      // Ensure the FTS index after rows exist rather than only against the
+      // empty just-created table, so a failed creation is retried here.
+      await this.ensureFtsIndex(table);
+
+      if (canIncremental && changedPaths.length === 0 && deletedPaths.length === 0 && failedFiles === 0) {
+        console.error('Index is up to date, no changes detected.');
+        await this.writeJsonAtomic(hashPath, currentHashes);
+        await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
+        return { success: true, chunks: 0, message: 'Index up to date, no changes detected.' };
+      }
+
+      await table.optimize();
+
+      // Always persist the hashes: they contain exactly the files that were
+      // fully indexed, so failed files are retried on the next run instead of
+      // being masked by their pre-failure hashes.
       await this.writeJsonAtomic(hashPath, currentHashes);
+
+      if (failedFiles > 0) {
+        // Skip the freshness metadata so queries keep warning that the index
+        // is stale until a run completes without failures.
+        return {
+          success: false,
+          chunks: indexedChunks,
+          message: `Failed to index ${failedFiles} file(s).`,
+        };
+      }
+
       await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
 
       if (canIncremental) {
@@ -851,84 +952,48 @@ export class VaultIndexer {
     try {
       const sourcePath = this.validatePath(sourceRelativePath);
       const destPath = this.validatePath(destRelativePath);
-      const { hashPath, lockPath, metadataPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+      const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
       releaseIndexLock = await this.acquireIndexLock(lockPath);
       const embedder = Embedder.getInstance();
       const filePath = getSafeFilePath(vaultPath, destRelativePath);
+      const db = await this.getDb(vaultPath, workspacePath, vaultId);
+      const tableNames = await db.tableNames();
 
-      const content = await fs.readFile(filePath, 'utf-8');
-      const contentHash = md5(content);
-      const { content: body, data: metadata } = matter(content);
-
-      const chunkingOptions = chunkingOptionsFromEnv();
-      chunkingOptions.graphMetadata = {
-        entities: normalizeToStringArray(metadata.entities),
-        communities: normalizeToStringArray(metadata.communities)
-      };
-
-      const { textsToEmbed, chunkMetadata } = buildEmbeddingInputs(destPath, body, chunkingOptions);
-      const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];
+      if (await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
+        return this.fullReindexRequiredResult();
+      }
 
       let hashes: Record<string, string> = {};
       try {
         hashes = JSON.parse(await fs.readFile(hashPath, 'utf-8'));
       } catch { /* ignore */ }
 
-      const db = await this.getDb(vaultPath, workspacePath, vaultId);
-      const tableNames = await db.tableNames();
-      const hasTable = tableNames.includes('notes');
-
-      if (textsToEmbed.length === 0) {
-        if (hasTable) {
-          const table = await db.openTable('notes');
-          await this.deleteRowsForPaths(table, pathsToDelete);
-          await table.optimize();
-        }
-        delete hashes[sourcePath];
-        hashes[destPath] = contentHash;
-        await this.writeJsonAtomic(hashPath, hashes);
-        await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
-        return { success: true, chunks: 0, message: 'Moved file has no embeddable content.' };
+      const table = tableNames.includes(NOTES_TABLE_NAME)
+        ? await db.openTable(NOTES_TABLE_NAME)
+        : await this.createNotesTable(db);
+      if (!tableNames.includes(NOTES_TABLE_NAME)) {
+        await this.writeNotesSchemaVersion(schemaVersionPath);
       }
+      await this.ensureFtsIndex(table);
 
-      const chunks = await this.embedWithFallback(embedder, textsToEmbed, chunkMetadata);
-      if (chunks.length === 0) {
-        return { success: false, message: `Failed to embed content for ${destRelativePath}.` };
-      }
-
-      const chunkRows = chunks as unknown as Record<string, unknown>[];
-      let table: lancedb.Table;
-
-      if (!hasTable) {
-        table = await db.createTable('notes', chunkRows);
-        await this.ensureFtsIndex(table);
-      } else {
-        table = await db.openTable('notes');
-        const schema = await table.schema();
-        const hasEntities = schema.fields.some(f => f.name === 'entities');
-
-        if (!hasEntities) {
-          console.error("Schema mismatch detected (missing 'entities'). Recreating table...");
-          await db.dropTable('notes');
-          table = await db.createTable('notes', chunkRows);
-          await this.ensureFtsIndex(table);
-        } else {
-          await this.ensureFtsIndex(table);
-          await this.deleteRowsForPaths(table, [destPath]);
-          await table.add(chunkRows);
-          if (sourcePath !== destPath) {
-            await this.deleteRowsForPaths(table, [sourcePath]);
-          }
-        }
-      }
+      const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];
+      const result = await this.indexNoteIntoTable(table, embedder, vaultPath, destPath, pathsToDelete);
+      if (!result.success) return result;
 
       await table.optimize();
       delete hashes[sourcePath];
-      hashes[destPath] = contentHash;
+      if (result.contentHash) {
+        hashes[destPath] = result.contentHash;
+      }
       await this.writeJsonAtomic(hashPath, hashes);
       await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
-      console.error(`Moved index entry from ${sourceRelativePath} to ${destRelativePath} (${chunks.length} chunks).`);
-      return { success: true, chunks: chunks.length };
+
+      if ((result.chunks ?? 0) === 0) {
+        return { success: true, chunks: 0, message: 'Moved file has no embeddable content.' };
+      }
+
+      console.error(`Moved index entry from ${sourceRelativePath} to ${destRelativePath} (${result.chunks} chunks).`);
+      return { success: true, chunks: result.chunks };
     } catch (err) {
       console.error(`Failed to move indexed file ${sourceRelativePath} to ${destRelativePath}:`, err);
       return { success: false, message: String(err) };
@@ -979,13 +1044,13 @@ export class VaultIndexer {
             .fullTextSearch(query)
             .limit(limit)
             .toArray();
-        return results;
+        return this.normalizeSearchResults(results as Array<Record<string, unknown>>);
       } catch (err) {
         console.error("FTS Hybrid Search failed, falling back to vector search. Consider running a full re-index.", err);
         const results = await table.vectorSearch(vector)
             .limit(limit)
             .toArray();
-        return results;
+        return this.normalizeSearchResults(results as Array<Record<string, unknown>>);
       }
     } finally {
       release();

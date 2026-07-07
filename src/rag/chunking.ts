@@ -96,8 +96,8 @@ export interface NoteMetadata {
   id: string;
   path: string;
   text: string;
-  entities: string;
-  communities: string;
+  entities: string[];
+  communities: string[];
 }
 
 export function buildEmbeddingInputs(relativePath: string, body: string, options?: ChunkingOptions): { 
@@ -167,8 +167,8 @@ export function buildEmbeddingInputs(relativePath: string, body: string, options
       id: md5(`${relativePath}-${chunkIndex}`),
       path: relativePath,
       text: finalTexts[chunkIndex],
-      entities: (entities && entities.length > 0) ? entities.join(', ') : '',
-      communities: (communities && communities.length > 0) ? communities.join(', ') : '',
+      entities: entities ?? [],
+      communities: communities ?? [],
     };
     
     chunkMetadata.push(meta);

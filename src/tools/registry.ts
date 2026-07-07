@@ -55,8 +55,18 @@ async function reindexMovedNote(
         vaultId,
     )) as { success?: boolean; message?: string };
     if (!result.success) {
+        const message = result.message ?? "unknown error";
+        // The file is already renamed on disk at this point. A schema
+        // migration pending on the whole index is not a reason to report the
+        // move itself as failed — log it and let the forced reindex catch up.
+        if (message.includes("force_reindex=true")) {
+            console.error(
+                `Post-move reindex skipped for ${sourceRelativePath} -> ${destRelativePath}: ${message}`,
+            );
+            return;
+        }
         throw new Error(
-            `Post-move reindex failed for ${sourceRelativePath} -> ${destRelativePath}: ${result.message ?? "unknown error"}`,
+            `Post-move reindex failed for ${sourceRelativePath} -> ${destRelativePath}: ${message}`,
         );
     }
 }

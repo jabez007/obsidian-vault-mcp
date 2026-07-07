@@ -1,6 +1,9 @@
 ## Summary
 Transition from implicit schema inference to explicit LanceDB schema definition
 
+## Status
+**Resolved** (2026-07-07) via [[2026-07-07-explicit-schema-and-unified-indexing-pipeline]], which superseded and extended this issue.
+
 ## Context
 The project currently relies on LanceDB's implicit schema inference during table creation (`db.createTable('notes', chunkRows)`). While convenient, this is fragile when dealing with heterogeneous metadata (e.g., some notes having graph metadata like `entities` or `communities` while others do not). Recent fixes introduced default empty strings to stabilize inference, but a formal schema is required for long-term robustness and to support advanced data types like arrays.
 

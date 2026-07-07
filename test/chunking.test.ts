@@ -97,6 +97,19 @@ describe('buildEmbeddingInputs', () => {
     expect(result.chunkMetadata[0].path).toBe('folder/note.md');
   });
 
+  it('stores graph metadata as string arrays', () => {
+    const body = 'A paragraph long enough to be included in the output chunks.';
+    const result = buildEmbeddingInputs('test.md', body, {
+      graphMetadata: {
+        entities: ['AI', 'Climate Change'],
+        communities: ['Technology'],
+      },
+    });
+
+    expect(result.chunkMetadata[0].entities).toEqual(['AI', 'Climate Change']);
+    expect(result.chunkMetadata[0].communities).toEqual(['Technology']);
+  });
+
   it('respects custom options', () => {
     const body = 'Short.\n\nA medium length paragraph here.\n\nAnother medium paragraph here too.';
     const result = buildEmbeddingInputs('test.md', body, {

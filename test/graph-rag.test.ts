@@ -61,8 +61,8 @@ This is a note about how Artificial Intelligence can help in monitoring and miti
     expect(firstChunk.text).toContain('Artificial Intelligence');
     
     // Check if metadata is also stored in separate columns (if implemented)
-    expect(firstChunk.entities).toBe('AI, Climate Change');
-    expect(firstChunk.communities).toBe('Sustainability, Technology');
+    expect(firstChunk.entities).toEqual(['AI', 'Climate Change']);
+    expect(firstChunk.communities).toEqual(['Sustainability', 'Technology']);
   });
 
   it('handles notes without graph metadata normally', async () => {
@@ -82,8 +82,8 @@ This is just a simple note without any special graph entities or communities in 
     const firstChunk = searchResults[0];
     
     expect(firstChunk.text).not.toContain('[METADATA:');
-    expect(firstChunk.entities).toBe('');
-    expect(firstChunk.communities).toBe('');
+    expect(firstChunk.entities).toEqual([]);
+    expect(firstChunk.communities).toEqual([]);
   });
 
   it('handles single string metadata (not just arrays)', async () => {
@@ -104,8 +104,8 @@ This is a note with single string metadata.
     const firstChunk = searchResults[0];
     
     expect(firstChunk.text).toContain('[METADATA: Entities: AI | Communities: Sustainability]');
-    expect(firstChunk.entities).toBe('AI');
-    expect(firstChunk.communities).toBe('Sustainability');
+    expect(firstChunk.entities).toEqual(['AI']);
+    expect(firstChunk.communities).toEqual(['Sustainability']);
   });
 
   it('truncates metadata if it would exceed maxChunkChars', async () => {
