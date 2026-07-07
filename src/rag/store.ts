@@ -341,7 +341,19 @@ export class VaultIndexer {
       const tableNames = await db.tableNames();
       const tableExists = tableNames.includes('notes');
       const hasPreviousHashes = Object.keys(previousHashes).length > 0;
-      const canIncremental = tableExists && hasPreviousHashes && !force;
+      // Check schema compatibility up front so a legacy table (missing the
+      // 'entities' column) downgrades to a full reindex before Phase 1 skips
+      // unchanged files.
+      let schemaCompatible = true;
+      if (tableExists && hasPreviousHashes && !force) {
+        const existingTable = await db.openTable('notes');
+        const schema = await existingTable.schema();
+        schemaCompatible = schema.fields.some(f => f.name === 'entities');
+        if (!schemaCompatible) {
+          console.error("Schema mismatch detected (missing 'entities'). Switching to full reindex.");
+        }
+      }
+      const canIncremental = tableExists && hasPreviousHashes && !force && schemaCompatible;
 
       const batchSizeRaw = getFirstNumericEnv(['OBSIDIAN_EMBED_BATCH_SIZE', 'CODEX_OBSIDIAN_EMBED_BATCH_SIZE', 'GEMINI_OBSIDIAN_EMBED_BATCH_SIZE'], 48);
       const batchSize = Number.isFinite(batchSizeRaw) && batchSizeRaw > 0 ? Math.min(Math.floor(batchSizeRaw), 256) : 48;
@@ -464,19 +476,11 @@ export class VaultIndexer {
       let tableInitialized = false;
       let table: lancedb.Table | null = null;
       const persistedChunkCounts: Record<string, number> = {};
+      const resetTableOnFullReindex = !canIncremental && tableExists;
 
       // For incremental mode: delete old chunks for changed/deleted files, keep existing table
       if (canIncremental) {
         table = await db.openTable('notes');
-        const schema = await table.schema();
-        const hasEntities = schema.fields.some(f => f.name === 'entities');
-        
-        if (!hasEntities) {
-          console.error("Schema mismatch detected (missing 'entities'). Switching to full reindex.");
-          // Force full reindex by resetting canIncremental and following the else path
-          return this.indexVault(vaultPath, true, workspacePath, vaultId);
-        }
-
         await this.ensureFtsIndex(table);
 
         const pathsToDelete = [...changedPaths, ...deletedPaths];
@@ -527,23 +531,13 @@ export class VaultIndexer {
           const chunkRows = chunks as unknown as Record<string, unknown>[];
 
           if (!tableInitialized) {
-            try {
-              table = await db.openTable('notes');
-              const schema = await table.schema();
-              const hasEntities = schema.fields.some(f => f.name === 'entities');
-              if (!hasEntities) {
-                console.error("Schema mismatch detected (missing 'entities'). Recreating table...");
-                await db.dropTable('notes');
-                table = await db.createTable('notes', chunkRows);
-                await this.ensureFtsIndex(table);
-              } else {
-                await this.ensureFtsIndex(table);
-                await table.add(chunkRows);
-              }
-            } catch (e) {
-              table = await db.createTable('notes', chunkRows);
-              await this.ensureFtsIndex(table);
+            // Only reachable on a full reindex: either no table exists yet, or
+            // the stale one must be dropped before the first write.
+            if (resetTableOnFullReindex) {
+              await db.dropTable('notes');
             }
+            table = await db.createTable('notes', chunkRows);
+            await this.ensureFtsIndex(table);
             tableInitialized = true;
           } else {
             if (!table) {

@@ -145,6 +145,136 @@ describe('VaultIndexer path resolution and storage', () => {
     expect(searchResults[0].text).toContain('cats');
   });
 
+  it('keeps row count stable when force reindexing an existing vault', async () => {
+    await fs.writeFile(
+      path.join(vaultPath, 'note.md'),
+      'This is a sufficiently long note to pass the minimum chunk size filter and should only appear once after repeated full reindexes.',
+      'utf-8',
+    );
+
+    const firstResult = await indexer.indexVault(vaultPath, true, workspacePath);
+    const secondResult = await indexer.indexVault(vaultPath, true, workspacePath);
+
+    const lancedb = await import('@lancedb/lancedb');
+    const vaultHash = md5(path.resolve(vaultPath));
+    const dbPath = path.join(workspacePath, STORAGE_DIR_NAME, 'vaults', vaultHash, 'lancedb');
+    const hashPath = path.join(workspacePath, STORAGE_DIR_NAME, 'vaults', vaultHash, 'file-hashes.json');
+
+    const readIndexState = async () => {
+      const db = await lancedb.connect(dbPath);
+      try {
+        const table = await db.openTable('notes');
+        const rowCount = await table.countRows();
+        const indices = await table.listIndices();
+        const ftsIndex = indices.find((idx: any) => idx.indexType === 'FTS' && idx.columns.includes('text'));
+        return { rowCount, ftsIndex };
+      } finally {
+        if (typeof db.close === 'function') {
+          db.close();
+        }
+      }
+    };
+
+    const firstRebuildState = await readIndexState();
+
+    expect(firstResult.success).toBe(true);
+    expect(secondResult.success).toBe(true);
+    expect(secondResult.chunks).toBe(firstResult.chunks);
+    expect(firstRebuildState.rowCount).toBe(firstResult.chunks);
+
+    await fs.rm(hashPath, { force: true });
+    const missingHashResult = await indexer.indexVault(vaultPath, false, workspacePath);
+    const missingHashRebuildState = await readIndexState();
+
+    expect(missingHashResult.success).toBe(true);
+    expect(missingHashResult.chunks).toBe(firstResult.chunks);
+    expect(missingHashRebuildState.rowCount).toBe(firstResult.chunks);
+    expect(missingHashRebuildState.ftsIndex).toBeDefined();
+  });
+
+  it('keeps row count stable when incrementally reindexing a changed file', async () => {
+    await fs.writeFile(
+      path.join(vaultPath, 'first.md'),
+      'This first note is long enough to be indexed and should stay present while another note changes.',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(vaultPath, 'second.md'),
+      'This second note is long enough to be indexed before it changes during incremental indexing.',
+      'utf-8',
+    );
+
+    const initialResult = await indexer.indexVault(vaultPath, true, workspacePath);
+
+    await fs.writeFile(
+      path.join(vaultPath, 'second.md'),
+      'This second note changed, remains long enough to index, and should replace its old chunks incrementally.',
+      'utf-8',
+    );
+    const incrementalResult = await indexer.indexVault(vaultPath, false, workspacePath);
+
+    const lancedb = await import('@lancedb/lancedb');
+    const vaultHash = md5(path.resolve(vaultPath));
+    const dbPath = path.join(workspacePath, STORAGE_DIR_NAME, 'vaults', vaultHash, 'lancedb');
+
+    const db = await lancedb.connect(dbPath);
+    try {
+      const table = await db.openTable('notes');
+      const rowCount = await table.countRows();
+
+      expect(initialResult.success).toBe(true);
+      expect(initialResult.chunks).toBe(2);
+      expect(incrementalResult.success).toBe(true);
+      expect(incrementalResult.chunks).toBe(1);
+      expect(rowCount).toBe(initialResult.chunks);
+    } finally {
+      if (typeof db.close === 'function') {
+        db.close();
+      }
+    }
+  });
+
+  it('falls back to a full reindex when the table is missing the entities column', async () => {
+    await fs.writeFile(
+      path.join(vaultPath, 'note.md'),
+      'This note is long enough to be indexed and will survive a legacy schema migration.',
+      'utf-8',
+    );
+
+    await indexer.indexVault(vaultPath, true, workspacePath);
+
+    // Replace the table with a legacy-schema copy (no entities/communities
+    // columns) while keeping the hash file, so the next run looks incremental.
+    const lancedb = await import('@lancedb/lancedb');
+    const vaultHash = md5(path.resolve(vaultPath));
+    const dbPath = path.join(workspacePath, STORAGE_DIR_NAME, 'vaults', vaultHash, 'lancedb');
+    const db = await lancedb.connect(dbPath);
+    await db.dropTable('notes');
+    await db.createTable('notes', [
+      { id: 'legacy', path: 'note.md', text: 'legacy row', vector: new Array(384).fill(0.1) },
+    ]);
+    if (typeof db.close === 'function') {
+      db.close();
+    }
+
+    const result = await indexer.indexVault(vaultPath, false, workspacePath);
+
+    expect(result.success).toBe(true);
+    expect(result.chunks).toBe(1);
+
+    const verifyDb = await lancedb.connect(dbPath);
+    try {
+      const table = await verifyDb.openTable('notes');
+      const schema = await table.schema();
+      expect(schema.fields.some((f: any) => f.name === 'entities')).toBe(true);
+      expect(await table.countRows()).toBe(1);
+    } finally {
+      if (typeof verifyDb.close === 'function') {
+        verifyDb.close();
+      }
+    }
+  });
+
   it('creates an FTS index on the text column during indexing', async () => {
     await fs.writeFile(path.join(vaultPath, 'note.md'), 'This is a sufficiently long note to pass the minimum chunk size filter of forty characters.', 'utf-8');
     
