@@ -41,6 +41,7 @@ async function createFakeContext(configOverrides: Partial<ToolConfig> = {}) {
     indexFile: vi.fn(async () => ({ success: true, chunks: 1 })),
     indexVault: vi.fn(async () => ({ success: true, chunks: 2 })),
     moveFile: vi.fn(async () => ({ success: true, chunks: 1 })),
+    checkIndexStaleness: vi.fn(async () => ({ stale: false })),
     search: vi.fn(async () => [
       { path: 'Notes/A.md', _relevance_score: 0.875, text: 'matched text' },
       { path: 'Notes/B.md', _distance: 0.125, text: 'fallback text' },
@@ -166,6 +167,21 @@ describe('tool registry dispatch', () => {
 
     expect(cliResult.output).toBe(mcpResult.content[0].text);
     expect(cliResult.output).toContain('Relevance: 0.125');
+  });
+
+  it('appends a stale index notice to RAG query results', async () => {
+    const { context, indexer, vaultPath } = await createFakeContext();
+    vi.mocked(indexer.checkIndexStaleness).mockResolvedValue({
+      stale: true,
+      reason: 'vault files changed after the last index',
+    });
+
+    const result = await dispatchMcpTool('obsidian_rag_query', { query: 'needle' }, context);
+
+    expect(indexer.checkIndexStaleness).toHaveBeenCalledWith(vaultPath, null, null);
+    expect(indexer.search).toHaveBeenCalledWith('needle', vaultPath, 5, null, null);
+    expect(result.content[0].text).toContain('File: Notes/A.md');
+    expect(result.content[0].text).toContain('Index may be stale (vault files changed after the last index). Run obsidian_rag_index to refresh.');
   });
 
   it('rejects vault and workspace overrides outside OBSIDIAN_ALLOWED_VAULTS', async () => {

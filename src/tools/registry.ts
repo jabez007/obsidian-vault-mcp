@@ -425,19 +425,20 @@ export const obsidianTools: ObsidianTool[] = [
             const vaultPath = context.getVaultPath(args.vault_path);
             const workspacePath = context.getWorkspacePath(args.workspace_path);
             const vaultId = context.getVaultId(args.vault_id);
-            const results = await context.indexer.search(
-                query,
-                vaultPath,
-                limit,
-                workspacePath,
-                vaultId,
-            );
-            return results
+            const [staleness, results] = await Promise.all([
+                context.indexer.checkIndexStaleness(vaultPath, workspacePath, vaultId),
+                context.indexer.search(query, vaultPath, limit, workspacePath, vaultId),
+            ]);
+            const text = results
                 .map(
                     (result) =>
                         `---\nFile: ${result.path}\nRelevance: ${result._relevance_score ?? result._distance}\nContent: ${result.text}\n---`,
                 )
                 .join("\n");
+            const staleNotice = staleness.stale
+                ? `Index may be stale (${staleness.reason ?? "vault files changed"}). Run obsidian_rag_index to refresh.`
+                : "";
+            return [text, staleNotice].filter((part) => part.length > 0).join("\n\n");
         },
     },
     {

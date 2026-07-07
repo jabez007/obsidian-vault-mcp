@@ -1,6 +1,9 @@
 ## Summary
 Add cross-process locking for the shared index and a staleness signal on query
 
+## Status
+**Resolved** (2026-07-07). An advisory `index.lock` (atomic `wx` create, token-guarded release, PID+hostname+age staleness with a bounded env-tunable wait) protects `indexVault`/`indexFile`/`moveFile`; stale-lock takeover only proceeds while the lock is byte-identical to the one judged stale, so competing waiters cannot delete each other's fresh locks, and content-less locks clear after a 5s grace instead of blocking for the full stale window. `obsidian_rag_query` compares a raw-glob count/mtime snapshot against `index-metadata.json` and appends a stale notice; single-file reindexes merge into the metadata (only the indexed file advances the mtime watermark) so external edits stay detected. Known residuals, documented in code and README: timestamp-preserving restores (git checkout, sync rollbacks) are invisible to the heuristic, and external deletions racing a write-tool reindex are reconciled at the next full index.
+
 ## Context
 Two related gaps:
 1. **Concurrency**: The `SessionStart` hook (`scripts/session-init.sh`) and the MCP server can index the same vault concurrently. The in-process mutex in `VaultIndexer` does not protect the shared LanceDB directory or `file-hashes.json` across processes, so hash writes are last-writer-wins. The rename-race workaround in `getStorageRoot` (`src/rag/store.ts`) shows this has already bitten once.

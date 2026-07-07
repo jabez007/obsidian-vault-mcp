@@ -27,6 +27,20 @@ const allowedVaultEnvKeys = [
 const originalAllowedVaultEnv = Object.fromEntries(
   allowedVaultEnvKeys.map((key) => [key, process.env[key]]),
 );
+const indexLockEnvKeys = [
+  'OBSIDIAN_INDEX_LOCK_WAIT_MS',
+  'CODEX_OBSIDIAN_INDEX_LOCK_WAIT_MS',
+  'GEMINI_OBSIDIAN_INDEX_LOCK_WAIT_MS',
+  'OBSIDIAN_INDEX_LOCK_STALE_MS',
+  'CODEX_OBSIDIAN_INDEX_LOCK_STALE_MS',
+  'GEMINI_OBSIDIAN_INDEX_LOCK_STALE_MS',
+  'OBSIDIAN_INDEX_LOCK_RETRY_MS',
+  'CODEX_OBSIDIAN_INDEX_LOCK_RETRY_MS',
+  'GEMINI_OBSIDIAN_INDEX_LOCK_RETRY_MS',
+] as const;
+const originalIndexLockEnv = Object.fromEntries(
+  indexLockEnvKeys.map((key) => [key, process.env[key]]),
+);
 vi.mock('os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('os')>();
   return {
@@ -67,7 +81,19 @@ describe('VaultIndexer path resolution and storage', () => {
         process.env[key] = originalValue;
       }
     }
+    for (const key of indexLockEnvKeys) {
+      const originalValue = originalIndexLockEnv[key];
+      if (originalValue === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = originalValue;
+      }
+    }
   });
+
+  function getVaultStorePath(vaultId = md5(path.resolve(vaultPath))) {
+    return path.join(workspacePath, STORAGE_DIR_NAME, 'vaults', vaultId);
+  }
 
   it('uses workspace_path when provided', async () => {
     // Add a note long enough to be indexed
@@ -143,6 +169,61 @@ describe('VaultIndexer path resolution and storage', () => {
 
     expect(dbExists).toBe(true);
     expect(hashExists).toBe(true);
+  });
+
+  it('times out when another live process owns the vault index lock', async () => {
+    await fs.writeFile(path.join(vaultPath, 'note.md'), 'This note is long enough to trigger indexing while a live lock exists.', 'utf-8');
+    const storePath = getVaultStorePath();
+    await fs.mkdir(storePath, { recursive: true });
+    await fs.writeFile(
+      path.join(storePath, 'index.lock'),
+      JSON.stringify({ pid: process.pid, createdAt: Date.now(), token: 'active-test-lock' }),
+      'utf-8',
+    );
+    process.env.OBSIDIAN_INDEX_LOCK_WAIT_MS = '20';
+    process.env.OBSIDIAN_INDEX_LOCK_RETRY_MS = '10';
+    process.env.OBSIDIAN_INDEX_LOCK_STALE_MS = '60000';
+
+    await expect(indexer.indexVault(vaultPath, true, workspacePath))
+      .rejects.toThrow(/Timed out waiting for RAG index lock/);
+  });
+
+  it('removes a stale vault index lock before indexing', async () => {
+    await fs.writeFile(path.join(vaultPath, 'note.md'), 'This note is long enough to be indexed after a stale lock is cleared.', 'utf-8');
+    const storePath = getVaultStorePath();
+    const lockPath = path.join(storePath, 'index.lock');
+    await fs.mkdir(storePath, { recursive: true });
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: process.pid, createdAt: Date.now() - 10000, token: 'stale-test-lock' }),
+      'utf-8',
+    );
+    process.env.OBSIDIAN_INDEX_LOCK_WAIT_MS = '1000';
+    process.env.OBSIDIAN_INDEX_LOCK_RETRY_MS = '10';
+    process.env.OBSIDIAN_INDEX_LOCK_STALE_MS = '1';
+
+    const result = await indexer.indexVault(vaultPath, true, workspacePath);
+
+    expect(result.success).toBe(true);
+    await expect(fs.stat(lockPath)).rejects.toThrow();
+  });
+
+  it('clears a content-less lock file after its grace period', async () => {
+    await fs.writeFile(path.join(vaultPath, 'note.md'), 'This note is long enough to be indexed after an empty lock is cleared.', 'utf-8');
+    const storePath = getVaultStorePath();
+    const lockPath = path.join(storePath, 'index.lock');
+    await fs.mkdir(storePath, { recursive: true });
+    await fs.writeFile(lockPath, '', 'utf-8');
+    const past = new Date(Date.now() - 10000);
+    await fs.utimes(lockPath, past, past);
+    process.env.OBSIDIAN_INDEX_LOCK_WAIT_MS = '1000';
+    process.env.OBSIDIAN_INDEX_LOCK_RETRY_MS = '10';
+    process.env.OBSIDIAN_INDEX_LOCK_STALE_MS = '60000';
+
+    const result = await indexer.indexVault(vaultPath, true, workspacePath);
+
+    expect(result.success).toBe(true);
+    await expect(fs.stat(lockPath)).rejects.toThrow();
   });
 
   it('successfully indexes and searches a mock vault', async () => {
@@ -248,6 +329,55 @@ describe('VaultIndexer path resolution and storage', () => {
         db.close();
       }
     }
+  });
+
+  it('reports stale when a vault file changes after indexing', async () => {
+    const notePath = path.join(vaultPath, 'note.md');
+    await fs.writeFile(
+      notePath,
+      'This note is long enough to be indexed before an external Obsidian edit changes it.',
+      'utf-8',
+    );
+
+    await indexer.indexVault(vaultPath, true, workspacePath);
+
+    await expect(indexer.checkIndexStaleness(vaultPath, workspacePath)).resolves.toEqual({ stale: false });
+
+    await fs.writeFile(
+      notePath,
+      'This note was changed outside the MCP write path and should make the index look stale.',
+      'utf-8',
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(notePath, future, future);
+
+    await expect(indexer.checkIndexStaleness(vaultPath, workspacePath)).resolves.toEqual({
+      stale: true,
+      reason: 'vault files changed after the last index',
+    });
+  });
+
+  it('keeps reporting stale after a single-file reindex when other files changed externally', async () => {
+    const notePathA = path.join(vaultPath, 'a.md');
+    const notePathB = path.join(vaultPath, 'b.md');
+    await fs.writeFile(notePathA, 'This first note is long enough to be indexed and will be rewritten through MCP.', 'utf-8');
+    await fs.writeFile(notePathB, 'This second note is long enough to be indexed and will change outside MCP.', 'utf-8');
+
+    await indexer.indexVault(vaultPath, true, workspacePath);
+    await expect(indexer.checkIndexStaleness(vaultPath, workspacePath)).resolves.toEqual({ stale: false });
+
+    // External edit in Obsidian: content and mtime change without a reindex.
+    await fs.writeFile(notePathB, 'This second note was edited outside the MCP write path and is not reindexed.', 'utf-8');
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(notePathB, future, future);
+
+    // A write-tool reindex of a different note must not absorb b.md's edit.
+    await indexer.indexFile(vaultPath, 'a.md', workspacePath);
+
+    await expect(indexer.checkIndexStaleness(vaultPath, workspacePath)).resolves.toEqual({
+      stale: true,
+      reason: 'vault files changed after the last index',
+    });
   });
 
   it('falls back to a full reindex when the table is missing the entities column', async () => {

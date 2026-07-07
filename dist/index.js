@@ -7304,12 +7304,12 @@ var require_stringify = __commonJS({
         throw new TypeError('expected "' + language + '.stringify" to be a function');
       }
       data = Object.assign({}, file2.data, data);
-      const open = opts.delimiters[0];
+      const open2 = opts.delimiters[0];
       const close = opts.delimiters[1];
       const matter3 = engine.stringify(data, options2).trim();
       let buf = "";
       if (matter3 !== "{}") {
-        buf = newline(open) + newline(matter3) + newline(close);
+        buf = newline(open2) + newline(matter3) + newline(close);
       }
       if (typeof file2.excerpt === "string" && file2.excerpt !== "") {
         if (str2.indexOf(file2.excerpt.trim()) === -1) {
@@ -7433,18 +7433,18 @@ var require_gray_matter = __commonJS({
     }
     function parseMatter(file2, options2) {
       const opts = defaults(options2);
-      const open = opts.delimiters[0];
+      const open2 = opts.delimiters[0];
       const close = "\n" + opts.delimiters[1];
       let str2 = file2.content;
       if (opts.language) {
         file2.language = opts.language;
       }
-      const openLen = open.length;
-      if (!utils.startsWith(str2, open, openLen)) {
+      const openLen = open2.length;
+      if (!utils.startsWith(str2, open2, openLen)) {
         excerpt(file2, opts);
         return file2;
       }
-      if (str2.charAt(openLen) === open.slice(-1)) {
+      if (str2.charAt(openLen) === open2.slice(-1)) {
         return file2;
       }
       str2 = str2.slice(openLen);
@@ -7500,9 +7500,9 @@ var require_gray_matter = __commonJS({
     };
     matter3.language = function(str2, options2) {
       const opts = defaults(options2);
-      const open = opts.delimiters[0];
+      const open2 = opts.delimiters[0];
       if (matter3.test(str2)) {
-        str2 = str2.slice(open.length);
+        str2 = str2.slice(open2.length);
       }
       const language = str2.slice(0, str2.search(/\r?\n/));
       return {
@@ -33271,7 +33271,10 @@ function chunkingOptionsFromEnv() {
   const target = Number.isFinite(targetRaw) && targetRaw > min ? Math.floor(targetRaw) : 700;
   return { minChunkChars: min, maxChunkChars: max, targetChunkChars: target };
 }
-var lancedb, fs5, path4, os2, import_gray_matter2, import_md52, STORAGE_DIR_NAME, LEGACY_STORAGE_DIR_NAME, VaultIndexer;
+function sleep(ms2) {
+  return new Promise((resolve3) => setTimeout(resolve3, ms2));
+}
+var lancedb, fs5, path4, os2, crypto, import_gray_matter2, import_md52, STORAGE_DIR_NAME, LEGACY_STORAGE_DIR_NAME, INDEX_LOCK_FILE_NAME, INDEX_METADATA_FILE_NAME, VaultIndexer;
 var init_store = __esm({
   "src/rag/store.ts"() {
     "use strict";
@@ -33279,6 +33282,7 @@ var init_store = __esm({
     fs5 = __toESM(require("fs/promises"));
     path4 = __toESM(require("path"));
     os2 = __toESM(require("os"));
+    crypto = __toESM(require("crypto"));
     init_index_min();
     import_gray_matter2 = __toESM(require_gray_matter());
     import_md52 = __toESM(require_md5());
@@ -33287,6 +33291,8 @@ var init_store = __esm({
     init_utils();
     STORAGE_DIR_NAME = ".obsidian-vault-mcp";
     LEGACY_STORAGE_DIR_NAME = ".gemini-obsidian";
+    INDEX_LOCK_FILE_NAME = "index.lock";
+    INDEX_METADATA_FILE_NAME = "index-metadata.json";
     VaultIndexer = class {
       db = null;
       currentDbPath = null;
@@ -33346,8 +33352,10 @@ var init_store = __esm({
         const baseStorePath = path4.join(storageRoot, "vaults", vaultIdentifier);
         const dbPath = path4.join(baseStorePath, "lancedb");
         const hashPath = path4.join(baseStorePath, "file-hashes.json");
+        const lockPath = path4.join(baseStorePath, INDEX_LOCK_FILE_NAME);
+        const metadataPath = path4.join(baseStorePath, INDEX_METADATA_FILE_NAME);
         await fs5.mkdir(baseStorePath, { recursive: true });
-        return { dbPath, hashPath };
+        return { dbPath, hashPath, lockPath, metadataPath };
       }
       async getStorageRoot(storageParent) {
         const newRoot = path4.join(storageParent, STORAGE_DIR_NAME);
@@ -33400,10 +33408,167 @@ var init_store = __esm({
           console.error("error ensuring FTS index", error2);
         }
       }
-      async writeHashesAtomic(hashPath, hashes) {
-        const tmpPath = `${hashPath}.tmp`;
-        await fs5.writeFile(tmpPath, JSON.stringify(hashes), "utf-8");
-        await fs5.rename(tmpPath, hashPath);
+      async writeJsonAtomic(filePath, value) {
+        const tmpPath = `${filePath}.tmp`;
+        await fs5.writeFile(tmpPath, JSON.stringify(value), "utf-8");
+        await fs5.rename(tmpPath, filePath);
+      }
+      async listMarkdownFiles(vaultPath) {
+        return Ze("**/*.md", { cwd: vaultPath, absolute: true, follow: true });
+      }
+      filterIndexableMarkdownFiles(vaultPath, discoveredFiles) {
+        return discoveredFiles.filter((filePath) => {
+          const relativePath = path4.relative(vaultPath, filePath).replace(/\\/g, "/");
+          try {
+            getSafeFilePath(vaultPath, relativePath);
+            return true;
+          } catch (error2) {
+            console.error(`Skipping out-of-bounds indexed file ${relativePath}: ${error2?.message ?? String(error2)}`);
+            return false;
+          }
+        });
+      }
+      // Freshness snapshots deliberately use the raw glob, not the
+      // boundary-filtered list: the filter costs realpath syscalls per file and
+      // adds no signal to a count/mtime heuristic, and both sides of the
+      // staleness comparison must count the same set of files.
+      async getVaultIndexSnapshotForFiles(files) {
+        const stats = await Promise.all(files.map((filePath) => fs5.stat(filePath).catch(() => null)));
+        const latestMtimeMs = stats.reduce((latest, stat3) => {
+          if (!stat3) return latest;
+          return Math.max(latest, stat3.mtimeMs);
+        }, 0);
+        return {
+          fileCount: files.length,
+          latestMtimeMs
+        };
+      }
+      async getVaultIndexSnapshot(vaultPath) {
+        return this.getVaultIndexSnapshotForFiles(await this.listMarkdownFiles(vaultPath));
+      }
+      async readIndexMetadata(metadataPath) {
+        try {
+          const metadata = JSON.parse(await fs5.readFile(metadataPath, "utf-8"));
+          if (typeof metadata.fileCount !== "number" || typeof metadata.latestMtimeMs !== "number") {
+            return null;
+          }
+          return metadata;
+        } catch {
+          return null;
+        }
+      }
+      async writeIndexMetadata(metadataPath, snapshot) {
+        await this.writeJsonAtomic(metadataPath, {
+          indexedAt: Date.now(),
+          ...snapshot
+        });
+      }
+      // Merge a single indexed file into the freshness metadata. Only the file we
+      // just indexed may advance the mtime watermark — recomputing it from a full
+      // vault snapshot would absorb the mtimes of files edited outside MCP and
+      // mask their staleness. The file count is recounted (one directory walk, no
+      // stats) so our own note creations do not raise false stale notices; the
+      // residual blind spot is an external deletion or timestamp-preserving sync
+      // landing between full indexes, which the next indexVault reconciles.
+      async mergeIndexMetadataForFile(metadataPath, vaultPath, absoluteFilePath) {
+        const previous = await this.readIndexMetadata(metadataPath);
+        if (!previous) return;
+        const [files, fileStat] = await Promise.all([
+          this.listMarkdownFiles(vaultPath),
+          fs5.stat(absoluteFilePath).catch(() => null)
+        ]);
+        await this.writeIndexMetadata(metadataPath, {
+          fileCount: files.length,
+          latestMtimeMs: Math.max(previous.latestMtimeMs, fileStat?.mtimeMs ?? 0)
+        });
+      }
+      parseIndexLock(raw) {
+        if (raw === null) return null;
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      }
+      async readIndexLockRaw(lockPath) {
+        try {
+          return await fs5.readFile(lockPath, "utf-8");
+        } catch {
+          return null;
+        }
+      }
+      isPidRunning(pid) {
+        if (!Number.isInteger(pid) || pid <= 0) return false;
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch (error2) {
+          return error2?.code === "EPERM";
+        }
+      }
+      async isIndexLockStale(lockPath, raw, staleMs) {
+        const stat3 = await fs5.stat(lockPath).catch(() => null);
+        if (!stat3) return false;
+        const now = Date.now();
+        const info = this.parseIndexLock(raw);
+        if (!info) {
+          return now - stat3.mtimeMs > 5e3;
+        }
+        const createdAt = Number.isFinite(info.createdAt) ? Number(info.createdAt) : stat3.mtimeMs;
+        if (now - createdAt > staleMs) return true;
+        const sameHost = !info.hostname || info.hostname === os2.hostname();
+        if (sameHost && typeof info.pid === "number" && !this.isPidRunning(info.pid)) return true;
+        return false;
+      }
+      async acquireIndexLock(lockPath) {
+        const waitMs = Math.max(0, getFirstNumericEnv(["OBSIDIAN_INDEX_LOCK_WAIT_MS", "CODEX_OBSIDIAN_INDEX_LOCK_WAIT_MS", "GEMINI_OBSIDIAN_INDEX_LOCK_WAIT_MS"], 3e4));
+        const staleMs = Math.max(0, getFirstNumericEnv(["OBSIDIAN_INDEX_LOCK_STALE_MS", "CODEX_OBSIDIAN_INDEX_LOCK_STALE_MS", "GEMINI_OBSIDIAN_INDEX_LOCK_STALE_MS"], 30 * 60 * 1e3));
+        const retryMs = Math.max(10, getFirstNumericEnv(["OBSIDIAN_INDEX_LOCK_RETRY_MS", "CODEX_OBSIDIAN_INDEX_LOCK_RETRY_MS", "GEMINI_OBSIDIAN_INDEX_LOCK_RETRY_MS"], 100));
+        const startedAt = Date.now();
+        const token = crypto.randomUUID();
+        const lockInfo = {
+          pid: process.pid,
+          createdAt: startedAt,
+          token,
+          hostname: os2.hostname()
+        };
+        while (true) {
+          try {
+            const handle = await fs5.open(lockPath, "wx");
+            try {
+              await handle.writeFile(JSON.stringify(lockInfo), "utf-8");
+            } finally {
+              await handle.close();
+            }
+            let released = false;
+            return async () => {
+              if (released) return;
+              released = true;
+              const current = this.parseIndexLock(await this.readIndexLockRaw(lockPath));
+              if (current?.token === token) {
+                await fs5.rm(lockPath, { force: true });
+              }
+            };
+          } catch (error2) {
+            if (error2?.code !== "EEXIST") throw error2;
+            const observedRaw = await this.readIndexLockRaw(lockPath);
+            if (observedRaw === null) {
+              continue;
+            }
+            if (await this.isIndexLockStale(lockPath, observedRaw, staleMs)) {
+              const currentRaw = await this.readIndexLockRaw(lockPath);
+              if (currentRaw === observedRaw) {
+                await fs5.rm(lockPath, { force: true });
+              }
+              continue;
+            }
+            const elapsed = Date.now() - startedAt;
+            if (elapsed >= waitMs) {
+              throw new Error(`Timed out waiting for RAG index lock: ${lockPath}`);
+            }
+            await sleep(Math.min(retryMs, waitMs - elapsed));
+          }
+        }
       }
       async deleteRowsForPaths(table, paths) {
         const uniquePaths = [...new Set(paths)];
@@ -33442,9 +33607,11 @@ var init_store = __esm({
       }
       async indexFile(vaultPath, relativePath, workspacePath, vaultId) {
         const release = await this.acquireLock();
+        let releaseIndexLock = null;
         try {
           const normalizedPath = this.validatePath(relativePath);
-          const { hashPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+          const { hashPath, lockPath, metadataPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+          releaseIndexLock = await this.acquireIndexLock(lockPath);
           const embedder = Embedder.getInstance();
           const filePath = getSafeFilePath(vaultPath, relativePath);
           const content = await fs5.readFile(filePath, "utf-8");
@@ -33490,7 +33657,8 @@ var init_store = __esm({
             }
             await table.optimize();
             hashes[normalizedPath] = contentHash;
-            await this.writeHashesAtomic(hashPath, hashes);
+            await this.writeJsonAtomic(hashPath, hashes);
+            await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
             console.error(`Indexed ${chunks.length} chunks for ${relativePath}.`);
             return { success: true, chunks: chunks.length };
           } else {
@@ -33500,33 +33668,31 @@ var init_store = __esm({
               await table.optimize();
             }
             delete hashes[normalizedPath];
-            await this.writeHashesAtomic(hashPath, hashes);
+            await this.writeJsonAtomic(hashPath, hashes);
+            await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
             return { success: true, chunks: 0, message: "File removed from index (no embeddable content)." };
           }
         } catch (err) {
           console.error(`Failed to index file ${relativePath}:`, err);
           return { success: false, message: String(err) };
         } finally {
+          if (releaseIndexLock) {
+            await releaseIndexLock();
+          }
           release();
         }
       }
       async indexVault(vaultPath, force = false, workspacePath, vaultId) {
         const release = await this.acquireLock();
+        let releaseIndexLock = null;
         try {
-          const { hashPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+          const { hashPath, lockPath, metadataPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+          releaseIndexLock = await this.acquireIndexLock(lockPath);
           const embedder = Embedder.getInstance();
           const db = await this.getDb(vaultPath, workspacePath, vaultId);
-          const discoveredFiles = await Ze("**/*.md", { cwd: vaultPath, absolute: true, follow: true });
-          const files = discoveredFiles.filter((filePath) => {
-            const relativePath = path4.relative(vaultPath, filePath).replace(/\\/g, "/");
-            try {
-              getSafeFilePath(vaultPath, relativePath);
-              return true;
-            } catch (error2) {
-              console.error(`Skipping out-of-bounds indexed file ${relativePath}: ${error2?.message ?? String(error2)}`);
-              return false;
-            }
-          });
+          const discoveredFiles = await this.listMarkdownFiles(vaultPath);
+          const files = this.filterIndexableMarkdownFiles(vaultPath, discoveredFiles);
+          const indexStartSnapshot = await this.getVaultIndexSnapshotForFiles(discoveredFiles);
           console.error(`Found ${files.length} notes in ${vaultPath}`);
           let previousHashes = {};
           if (!force) {
@@ -33638,7 +33804,8 @@ var init_store = __esm({
           }
           if (canIncremental && allTexts.length === 0 && deletedPaths.length === 0) {
             console.error("Index is up to date, no changes detected.");
-            await this.writeHashesAtomic(hashPath, currentHashes);
+            await this.writeJsonAtomic(hashPath, currentHashes);
+            await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
             return { success: true, chunks: 0, message: "Index up to date, no changes detected." };
           }
           if (!canIncremental && allTexts.length === 0) {
@@ -33744,7 +33911,8 @@ var init_store = __esm({
           if (table) {
             await table.optimize();
           }
-          await this.writeHashesAtomic(hashPath, currentHashes);
+          await this.writeJsonAtomic(hashPath, currentHashes);
+          await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
           if (canIncremental) {
             console.error(`Incremental update: ${indexedChunks} chunks embedded, ${deletedPaths.length} files removed.`);
           } else {
@@ -33752,15 +33920,20 @@ var init_store = __esm({
           }
           return { success: true, chunks: indexedChunks };
         } finally {
+          if (releaseIndexLock) {
+            await releaseIndexLock();
+          }
           release();
         }
       }
       async moveFile(vaultPath, sourceRelativePath, destRelativePath, workspacePath, vaultId) {
         const release = await this.acquireLock();
+        let releaseIndexLock = null;
         try {
           const sourcePath = this.validatePath(sourceRelativePath);
           const destPath = this.validatePath(destRelativePath);
-          const { hashPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+          const { hashPath, lockPath, metadataPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+          releaseIndexLock = await this.acquireIndexLock(lockPath);
           const embedder = Embedder.getInstance();
           const filePath = getSafeFilePath(vaultPath, destRelativePath);
           const content = await fs5.readFile(filePath, "utf-8");
@@ -33789,7 +33962,8 @@ var init_store = __esm({
             }
             delete hashes[sourcePath];
             hashes[destPath] = contentHash;
-            await this.writeHashesAtomic(hashPath, hashes);
+            await this.writeJsonAtomic(hashPath, hashes);
+            await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
             return { success: true, chunks: 0, message: "Moved file has no embeddable content." };
           }
           const chunks = await this.embedWithFallback(embedder, textsToEmbed, chunkMetadata);
@@ -33822,15 +33996,37 @@ var init_store = __esm({
           await table.optimize();
           delete hashes[sourcePath];
           hashes[destPath] = contentHash;
-          await this.writeHashesAtomic(hashPath, hashes);
+          await this.writeJsonAtomic(hashPath, hashes);
+          await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
           console.error(`Moved index entry from ${sourceRelativePath} to ${destRelativePath} (${chunks.length} chunks).`);
           return { success: true, chunks: chunks.length };
         } catch (err) {
           console.error(`Failed to move indexed file ${sourceRelativePath} to ${destRelativePath}:`, err);
           return { success: false, message: String(err) };
         } finally {
+          if (releaseIndexLock) {
+            await releaseIndexLock();
+          }
           release();
         }
+      }
+      async checkIndexStaleness(vaultPath, workspacePath, vaultId) {
+        const { metadataPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+        const metadata = await this.readIndexMetadata(metadataPath);
+        if (!metadata) {
+          return { stale: true, reason: "index metadata is missing" };
+        }
+        const snapshot = await this.getVaultIndexSnapshot(vaultPath);
+        if (snapshot.fileCount !== metadata.fileCount) {
+          return {
+            stale: true,
+            reason: `vault file count changed (${metadata.fileCount} indexed, ${snapshot.fileCount} current)`
+          };
+        }
+        if (snapshot.latestMtimeMs > metadata.latestMtimeMs + 1) {
+          return { stale: true, reason: "vault files changed after the last index" };
+        }
+        return { stale: false };
       }
       async search(query, vaultPath, limit = 5, workspacePath, vaultId) {
         const release = await this.acquireLock();
@@ -34298,20 +34494,19 @@ var obsidianTools = [
       const vaultPath = context.getVaultPath(args.vault_path);
       const workspacePath = context.getWorkspacePath(args.workspace_path);
       const vaultId = context.getVaultId(args.vault_id);
-      const results = await context.indexer.search(
-        query,
-        vaultPath,
-        limit,
-        workspacePath,
-        vaultId
-      );
-      return results.map(
+      const [staleness, results] = await Promise.all([
+        context.indexer.checkIndexStaleness(vaultPath, workspacePath, vaultId),
+        context.indexer.search(query, vaultPath, limit, workspacePath, vaultId)
+      ]);
+      const text = results.map(
         (result) => `---
 File: ${result.path}
 Relevance: ${result._relevance_score ?? result._distance}
 Content: ${result.text}
 ---`
       ).join("\n");
+      const staleNotice = staleness.stale ? `Index may be stale (${staleness.reason ?? "vault files changed"}). Run obsidian_rag_index to refresh.` : "";
+      return [text, staleNotice].filter((part) => part.length > 0).join("\n\n");
     }
   },
   {

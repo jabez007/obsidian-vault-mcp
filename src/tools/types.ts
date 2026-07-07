@@ -33,6 +33,11 @@ export interface VaultIndexerLike {
         workspacePath?: string | null,
         vaultId?: string | null,
     ): Promise<unknown>;
+    checkIndexStaleness(
+        vaultPath: string,
+        workspacePath?: string | null,
+        vaultId?: string | null,
+    ): Promise<{ stale: boolean; reason?: string }>;
     search(
         query: string,
         vaultPath: string,
