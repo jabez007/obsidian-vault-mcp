@@ -39,11 +39,15 @@ describe('Graph-aware RAG', () => {
     vi.restoreAllMocks();
   });
 
-  it('prepends graph metadata to chunks when present in frontmatter', async () => {
+  it('stores clean text while embedding graph metadata and headings', async () => {
     const noteContent = `---
 entities: [AI, Climate Change]
 communities: [Sustainability, Technology]
 ---
+# Research
+
+## Climate Monitoring
+
 This is a note about how Artificial Intelligence can help in monitoring and mitigating the effects of Climate Change. It is a long enough note to be indexed correctly and pass the character limit.
 `;
     const notePath = path.join(vaultPath, 'graph-note.md');
@@ -56,13 +60,37 @@ This is a note about how Artificial Intelligence can help in monitoring and miti
     expect(searchResults.length).toBeGreaterThan(0);
     const firstChunk = searchResults[0];
     
-    // Check if the metadata is prepended to the text
-    expect(firstChunk.text).toContain('[METADATA: Entities: AI, Climate Change | Communities: Sustainability, Technology]');
+    expect(firstChunk.text).not.toContain('[METADATA:');
     expect(firstChunk.text).toContain('Artificial Intelligence');
-    
-    // Check if metadata is also stored in separate columns (if implemented)
+    expect(firstChunk.heading_path).toBe('Research > Climate Monitoring');
     expect(firstChunk.entities).toEqual(['AI', 'Climate Change']);
     expect(firstChunk.communities).toEqual(['Sustainability', 'Technology']);
+    // The embedder input and the raw vector stay server-side.
+    expect(firstChunk).not.toHaveProperty('embedding_text');
+    expect(firstChunk).not.toHaveProperty('vector');
+  });
+
+  it('keyword-matches graph metadata terms that never appear in note bodies', async () => {
+    await fs.writeFile(path.join(vaultPath, 'planning.md'), `---
+communities: [Sustainability]
+---
+This note is about long-term planning for renewable infrastructure with enough content to be indexed.
+`, 'utf-8');
+    await fs.writeFile(path.join(vaultPath, 'other.md'), `---
+communities: [Technology]
+---
+This note is about something else entirely and also has enough content to be indexed properly.
+`, 'utf-8');
+
+    await indexer.indexVault(vaultPath, true, workspacePath);
+
+    // The mocked embedder returns identical vectors for everything, so only
+    // the keyword half of hybrid search can rank planning.md first — which
+    // requires the FTS index to cover embedding_text, where the community
+    // label lives; neither note body mentions 'Sustainability'.
+    const searchResults = await indexer.search('Sustainability', vaultPath, 5, workspacePath);
+    expect(searchResults.length).toBeGreaterThan(0);
+    expect(searchResults[0].path).toBe('planning.md');
   });
 
   it('handles notes without graph metadata normally', async () => {
@@ -103,9 +131,36 @@ This is a note with single string metadata.
     expect(searchResults.length).toBeGreaterThan(0);
     const firstChunk = searchResults[0];
     
-    expect(firstChunk.text).toContain('[METADATA: Entities: AI | Communities: Sustainability]');
+    expect(firstChunk.text).not.toContain('[METADATA:');
     expect(firstChunk.entities).toEqual(['AI']);
     expect(firstChunk.communities).toEqual(['Sustainability']);
+  });
+
+  it('filters search results by entity and community metadata', async () => {
+    await fs.writeFile(path.join(vaultPath, 'ai.md'), `---
+entities: [AI]
+communities: [Technology]
+---
+This note is about semantic search relevance and artificial intelligence systems with enough content to index.
+`, 'utf-8');
+    await fs.writeFile(path.join(vaultPath, 'climate.md'), `---
+entities: [Climate Change]
+communities: [Sustainability]
+---
+This note is about semantic search relevance and climate adaptation systems with enough content to index.
+`, 'utf-8');
+
+    await indexer.indexVault(vaultPath, true, workspacePath);
+
+    const entityResults = await indexer.search('semantic search relevance', vaultPath, 10, workspacePath, null, {
+      entities: ['AI'],
+    });
+    const communityResults = await indexer.search('semantic search relevance', vaultPath, 10, workspacePath, null, {
+      communities: ['Sustainability'],
+    });
+
+    expect(entityResults.map((result: any) => result.path)).toEqual(['ai.md']);
+    expect(communityResults.map((result: any) => result.path)).toEqual(['climate.md']);
   });
 
   it('truncates metadata if it would exceed maxChunkChars', async () => {

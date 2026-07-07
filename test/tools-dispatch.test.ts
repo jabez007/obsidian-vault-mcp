@@ -85,6 +85,11 @@ describe('tool registry dispatch', () => {
       type: 'boolean',
       description: 'Force full re-index, ignoring cached file hashes (default: false)',
     });
+    expect(response.tools.find((tool) => tool.name === 'obsidian_rag_query')?.inputSchema.properties?.entities).toEqual({
+      type: 'array',
+      description: 'Optional entity labels to require in matching chunks. Matched exactly (case-sensitive); comma-separated for CLI',
+      items: { type: 'string' },
+    });
   });
 
   it('dispatches MCP calls through the registry and includes RAG relevance', async () => {
@@ -101,11 +106,58 @@ describe('tool registry dispatch', () => {
       context,
     );
 
-    expect(indexer.search).toHaveBeenCalledWith('needle', altVaultPath, 3, null, null);
+    expect(indexer.search).toHaveBeenCalledWith('needle', altVaultPath, 3, null, null, {
+      entities: [],
+      communities: [],
+    });
     expect(result.content[0].text).toBe(
       '---\nFile: Notes/A.md\nRelevance: 0.875\nContent: matched text\n---\n' +
       '---\nFile: Notes/B.md\nRelevance: 0.125\nContent: fallback text\n---',
     );
+  });
+
+  it('passes RAG entity and community filters to the indexer', async () => {
+    const { context, indexer, vaultPath } = await createFakeContext();
+
+    await dispatchMcpTool(
+      'obsidian_rag_query',
+      {
+        query: 'needle',
+        entities: ['AI', 'Climate Change'],
+        communities: 'Technology, Sustainability',
+      },
+      context,
+    );
+
+    expect(indexer.search).toHaveBeenCalledWith('needle', vaultPath, 5, null, null, {
+      entities: ['AI', 'Climate Change'],
+      communities: ['Technology', 'Sustainability'],
+    });
+  });
+
+  it('rejects malformed RAG filters instead of silently searching unfiltered', async () => {
+    const { context, indexer } = await createFakeContext();
+
+    await expect(dispatchMcpTool(
+      'obsidian_rag_query',
+      { query: 'needle', entities: [42] },
+      context,
+    )).rejects.toThrow("'entities' must be an array of strings");
+    expect(indexer.search).not.toHaveBeenCalled();
+  });
+
+  it('parses CLI array flags into string arrays', async () => {
+    const { context, indexer, vaultPath } = await createFakeContext();
+    await dispatchCliTool(
+      ['obsidian_rag_query', '--query', 'needle', '--vault_path', vaultPath, '--entities', 'AI, Climate Change'],
+      context,
+      async () => '',
+    );
+
+    expect(indexer.search).toHaveBeenCalledWith('needle', vaultPath, 5, null, null, {
+      entities: ['AI', 'Climate Change'],
+      communities: [],
+    });
   });
 
   it('dispatches CLI calls through the registry and parses boolean flag values', async () => {
@@ -179,7 +231,10 @@ describe('tool registry dispatch', () => {
     const result = await dispatchMcpTool('obsidian_rag_query', { query: 'needle' }, context);
 
     expect(indexer.checkIndexStaleness).toHaveBeenCalledWith(vaultPath, null, null);
-    expect(indexer.search).toHaveBeenCalledWith('needle', vaultPath, 5, null, null);
+    expect(indexer.search).toHaveBeenCalledWith('needle', vaultPath, 5, null, null, {
+      entities: [],
+      communities: [],
+    });
     expect(result.content[0].text).toContain('File: Notes/A.md');
     expect(result.content[0].text).toContain('Index may be stale (vault files changed after the last index). Run obsidian_rag_index to refresh.');
   });
@@ -243,7 +298,10 @@ describe('tool registry dispatch', () => {
       context,
     );
 
-    expect(indexer.search).toHaveBeenCalledWith('needle', symlinkToVault, 5, null, null);
+    expect(indexer.search).toHaveBeenCalledWith('needle', symlinkToVault, 5, null, null, {
+      entities: [],
+      communities: [],
+    });
 
     const outOfBoundsVault = await makeTempDir('outside-vault-');
     const symlinkInsideBoundary = path.join(allowedRoot, 'outside-link');
@@ -328,7 +386,10 @@ describe('tool registry dispatch', () => {
     await dispatchMcpTool('obsidian_rag_query', { query: 'needle' }, context);
 
     expect(indexer.reset).toHaveBeenCalledOnce();
-    expect(indexer.search).toHaveBeenCalledWith('needle', vaultPath, 5, null, null);
+    expect(indexer.search).toHaveBeenCalledWith('needle', vaultPath, 5, null, null, {
+      entities: [],
+      communities: [],
+    });
     await expect(dispatchMcpTool(
       'obsidian_rag_query',
       { query: 'needle', vault_path: otherVaultPath },

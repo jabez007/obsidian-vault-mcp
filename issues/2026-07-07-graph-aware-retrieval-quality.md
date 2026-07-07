@@ -1,6 +1,9 @@
 ## Summary
 Make "graph-aware search" a real query capability, not just embedded text
 
+## Status
+**Resolved** (2026-07-07). Chunks store clean content in `text` with the metadata-wrapped embedder input kept server-side in `embedding_text`, which is also the FTS target so keyword search still matches entity/community labels and heading terms absent from note bodies; query results ship only the clean columns. `obsidian_rag_query` gained `entities`/`communities` filters (exact, case-sensitive `array_contains` predicates; malformed input is rejected loudly, and the CLI coerces `array`-typed flags generically). `heading_path` carries the full H1–H6 breadcrumb from a fence-aware parser (code-block `#` lines are content, and fenced blocks are never split); when the embedding-context budget truncates, breadcrumb detail is dropped before graph metadata. Schema version bumped to 3 with the read path now refusing a version-mismatched index the same way writes do. Before/after benchmark recorded in docs/pr-description-graph-aware-rag.md. Accepted tradeoff: chunks never merge across heading boundaries, so heading-dense notes yield more, smaller chunks.
+
 ## Context
 Today the graph metadata (entities, communities) is comma-joined and stuffed into the *embedded text* as a `[METADATA: ...]` prefix (`src/rag/chunking.ts`). That has three consequences: query results echo the wrapper back to the model; `obsidian_rag_query` offers no actual entity/community filtering; and chunks carry no document context (which heading they sit under). The "graph-aware" claim in the tool descriptions currently oversells what the query path can do.
 

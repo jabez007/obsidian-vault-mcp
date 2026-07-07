@@ -1,3 +1,5 @@
+import type { SearchFilters } from "../rag/store.js";
+
 export type JsonSchema = {
     type: string;
     properties?: Record<string, JsonSchemaProperty>;
@@ -8,6 +10,9 @@ export type JsonSchemaProperty = {
     type: string;
     description?: string;
     enum?: string[];
+    items?: {
+        type: string;
+    };
 };
 
 export type ToolArguments = Record<string, unknown>;
@@ -44,6 +49,7 @@ export interface VaultIndexerLike {
         limit?: number,
         workspacePath?: string | null,
         vaultId?: string | null,
+        filters?: SearchFilters,
     ): Promise<Array<Record<string, unknown>>>;
 }
 

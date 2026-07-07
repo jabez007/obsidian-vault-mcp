@@ -11,6 +11,7 @@ import {
   replaceInNote,
   stripHeadingFromLink,
   applyFrontmatterUpdate,
+  splitMarkdownByHeadingBreadcrumbs,
 } from '../src/utils';
 
 describe('extractWikilinks', () => {
@@ -63,6 +64,57 @@ describe('replaceSection', () => {
     expect(result).toContain('## Only');
     expect(result).toContain('Replaced');
     expect(result).not.toContain('Old content');
+  });
+});
+
+describe('splitMarkdownByHeadingBreadcrumbs', () => {
+  it('annotates paragraph blocks with active heading breadcrumbs', () => {
+    const blocks = splitMarkdownByHeadingBreadcrumbs([
+      'Preface paragraph.',
+      '',
+      '# Project',
+      '',
+      'Top-level project paragraph.',
+      '',
+      '## Risks',
+      '',
+      'Risk paragraph.',
+      '',
+      '### Detail',
+      '',
+      'Detail paragraph.',
+      '',
+      '## Mitigations',
+      '',
+      'Mitigation paragraph.',
+    ].join('\n'));
+
+    expect(blocks).toEqual([
+      { text: 'Preface paragraph.', headingPath: '' },
+      { text: 'Top-level project paragraph.', headingPath: 'Project' },
+      { text: 'Risk paragraph.', headingPath: 'Project > Risks' },
+      { text: 'Detail paragraph.', headingPath: 'Project > Risks > Detail' },
+      { text: 'Mitigation paragraph.', headingPath: 'Project > Mitigations' },
+    ]);
+  });
+
+  it('treats fenced code block contents as content, not headings or breaks', () => {
+    const blocks = splitMarkdownByHeadingBreadcrumbs([
+      '# Setup',
+      '',
+      '```bash',
+      '# install deps',
+      '',
+      'npm ci',
+      '```',
+      '',
+      'After the fence.',
+    ].join('\n'));
+
+    expect(blocks).toEqual([
+      { text: '```bash\n# install deps\n\nnpm ci\n```', headingPath: 'Setup' },
+      { text: 'After the fence.', headingPath: 'Setup' },
+    ]);
   });
 });
 

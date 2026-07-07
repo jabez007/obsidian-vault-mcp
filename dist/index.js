@@ -7614,6 +7614,55 @@ function extractWikilinks(content) {
   }
   return [...new Set(links)];
 }
+function splitMarkdownByHeadingBreadcrumbs(content) {
+  const blocks = [];
+  const headingStack = [];
+  let currentLines = [];
+  let activeFence = null;
+  const flush = () => {
+    const text = currentLines.join("\n").trim();
+    if (text.length > 0) {
+      blocks.push({
+        text,
+        headingPath: headingStack.map((entry) => entry.text).join(" > ")
+      });
+    }
+    currentLines = [];
+  };
+  for (const line of content.split(/\r?\n/)) {
+    const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    if (activeFence) {
+      if (fenceMatch && fenceMatch[1][0] === activeFence[0] && fenceMatch[1].length >= activeFence.length) {
+        activeFence = null;
+      }
+      currentLines.push(line);
+      continue;
+    }
+    if (fenceMatch) {
+      activeFence = fenceMatch[1];
+      currentLines.push(line);
+      continue;
+    }
+    const headingMatch = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    if (headingMatch) {
+      flush();
+      const level = headingMatch[1].length;
+      const headingText = headingMatch[2].replace(/\s+#+\s*$/, "").trim();
+      while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) {
+        headingStack.pop();
+      }
+      headingStack.push({ level, text: headingText });
+      continue;
+    }
+    if (line.trim().length === 0) {
+      flush();
+      continue;
+    }
+    currentLines.push(line);
+  }
+  flush();
+  return blocks;
+}
 function findSectionRange(content, heading) {
   const escapedHeading = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const headingRegex = new RegExp(`^(#{1,6})\\s+${escapedHeading}\\s*$`, "m");
@@ -33256,88 +33305,102 @@ function splitTextForEmbedding(text, maxChars = DEFAULTS.maxChunkChars) {
   if (current.length > 0) segments.push(current);
   return segments;
 }
-function mergeSegmentsForEmbedding(segments, targetChars) {
+function mergeTextSegments(segments, targetChars) {
   if (segments.length === 0) return [];
   const merged = [];
-  let current = "";
+  let current = null;
+  const flush = () => {
+    if (current) {
+      merged.push(current);
+      current = null;
+    }
+  };
   for (const segment of segments) {
-    if (segment.length >= targetChars) {
-      if (current.length > 0) {
-        merged.push(current);
-        current = "";
-      }
+    if (segment.text.length >= targetChars) {
+      flush();
       merged.push(segment);
       continue;
     }
-    const candidate = current.length > 0 ? `${current}
+    if (!current) {
+      current = segment;
+      continue;
+    }
+    const candidate = `${current.text}
 
-${segment}` : segment;
-    if (candidate.length <= targetChars) {
-      current = candidate;
+${segment.text}`;
+    if (current.headingPath === segment.headingPath && candidate.length <= targetChars) {
+      current = { ...current, text: candidate };
     } else {
-      if (current.length > 0) merged.push(current);
+      flush();
       current = segment;
     }
   }
-  if (current.length > 0) merged.push(current);
+  flush();
   return merged;
+}
+function buildContextualEmbeddingText(cleanText, headingPath, entities, communities, maxChunkChars) {
+  const parts = [];
+  if (entities.length > 0) parts.push(`Entities: ${entities.join(", ")}`);
+  if (communities.length > 0) parts.push(`Communities: ${communities.join(", ")}`);
+  if (headingPath.length > 0) parts.push(`Heading: ${headingPath}`);
+  if (parts.length === 0) {
+    return cleanText.length > maxChunkChars ? cleanText.slice(0, maxChunkChars) : cleanText;
+  }
+  const context = parts.join(" | ");
+  const wrapperOverhead = 14;
+  const contextBudget = Math.max(0, maxChunkChars - wrapperOverhead);
+  const minContextChars = Math.min(20, contextBudget, context.length);
+  const maxBaseTextLen = Math.max(0, maxChunkChars - wrapperOverhead - minContextChars);
+  const baseText = cleanText.length > maxBaseTextLen ? cleanText.slice(0, maxBaseTextLen) : cleanText;
+  const availableContextChars = Math.max(0, maxChunkChars - baseText.length - wrapperOverhead);
+  const contextual = context.length > availableContextChars ? context.slice(0, availableContextChars) : context;
+  return `[METADATA: ${contextual}]
+
+${baseText}`;
 }
 function buildEmbeddingInputs(relativePath, body, options2) {
   const minChunkChars = options2?.minChunkChars ?? DEFAULTS.minChunkChars;
   const maxChunkChars = options2?.maxChunkChars ?? DEFAULTS.maxChunkChars;
   const targetChunkChars = options2?.targetChunkChars ?? DEFAULTS.targetChunkChars;
-  const paragraphs = body.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
+  const blocks = splitMarkdownByHeadingBreadcrumbs(body);
   const rawSegments = [];
   const chunkMetadata = [];
-  for (let i = 0; i < paragraphs.length; i++) {
-    const paragraph = paragraphs[i].trim();
+  for (const block of blocks) {
+    const paragraph = block.text.trim();
     if (paragraph.length < minChunkChars) continue;
     const segments = splitTextForEmbedding(paragraph, maxChunkChars);
-    for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
-      const segment = segments[segmentIndex];
+    for (const segment of segments) {
       if (segment.length < minChunkChars) continue;
-      rawSegments.push(segment);
+      rawSegments.push({ text: segment, headingPath: block.headingPath });
     }
   }
-  const textsToEmbed = mergeSegmentsForEmbedding(rawSegments, Math.min(targetChunkChars, maxChunkChars));
-  const entities = options2?.graphMetadata?.entities;
-  const communities = options2?.graphMetadata?.communities;
-  const wrapperOverhead = 14;
-  const minMetadataChars = 20;
-  const finalTexts = textsToEmbed.map((text) => {
-    const hasMetadata = entities && entities.length > 0 || communities && communities.length > 0;
-    const effectiveMaxTextLen = hasMetadata ? maxChunkChars - wrapperOverhead - minMetadataChars : maxChunkChars;
-    const baseText = text.length > effectiveMaxTextLen ? text.slice(0, effectiveMaxTextLen) : text;
-    if (!hasMetadata) {
-      return baseText;
-    }
-    const parts = [];
-    if (entities && entities.length > 0) parts.push(`Entities: ${entities.join(", ")}`);
-    if (communities && communities.length > 0) parts.push(`Communities: ${communities.join(", ")}`);
-    const fullMetaContent = parts.join(" | ");
-    const available = maxChunkChars - baseText.length - wrapperOverhead;
-    const truncatedMeta = fullMetaContent.length > available ? fullMetaContent.slice(0, available) : fullMetaContent;
-    return `[METADATA: ${truncatedMeta}]
-
-${baseText}`;
-  });
-  for (let chunkIndex = 0; chunkIndex < finalTexts.length; chunkIndex++) {
+  const cleanChunks = mergeTextSegments(rawSegments, Math.min(targetChunkChars, maxChunkChars));
+  const entities = options2?.graphMetadata?.entities ?? [];
+  const communities = options2?.graphMetadata?.communities ?? [];
+  const textsToEmbed = cleanChunks.map(
+    (chunk) => buildContextualEmbeddingText(chunk.text, chunk.headingPath, entities, communities, maxChunkChars)
+  );
+  for (let chunkIndex = 0; chunkIndex < cleanChunks.length; chunkIndex++) {
+    const cleanChunk = cleanChunks[chunkIndex];
     const meta3 = {
       id: (0, import_md5.default)(`${relativePath}-${chunkIndex}`),
       path: relativePath,
-      text: finalTexts[chunkIndex],
-      entities: entities ?? [],
-      communities: communities ?? []
+      text: cleanChunk.text,
+      embedding_text: textsToEmbed[chunkIndex],
+      heading_path: cleanChunk.headingPath,
+      entities,
+      communities
     };
     chunkMetadata.push(meta3);
   }
-  return { textsToEmbed: finalTexts, chunkMetadata };
+  return { textsToEmbed, chunkMetadata };
 }
 var import_md5, DEFAULTS;
 var init_chunking = __esm({
   "src/rag/chunking.ts"() {
     "use strict";
     import_md5 = __toESM(require_md5());
+    init_utils();
     DEFAULTS = {
       minChunkChars: 40,
       maxChunkChars: 1800,
@@ -33375,7 +33438,7 @@ function chunkingOptionsFromEnv() {
 function sleep(ms2) {
   return new Promise((resolve3) => setTimeout(resolve3, ms2));
 }
-var lancedb, fs5, path4, os2, crypto, import_apache_arrow, import_gray_matter2, import_md52, STORAGE_DIR_NAME, LEGACY_STORAGE_DIR_NAME, INDEX_LOCK_FILE_NAME, INDEX_METADATA_FILE_NAME, SCHEMA_VERSION_FILE_NAME, NOTES_TABLE_NAME, NOTES_TABLE_SCHEMA_VERSION, EMBEDDING_DIMENSIONS, FULL_REINDEX_REQUIRED_MESSAGE, NOTES_TABLE_SCHEMA, VaultIndexer;
+var lancedb, fs5, path4, os2, crypto, import_apache_arrow, import_gray_matter2, import_md52, STORAGE_DIR_NAME, LEGACY_STORAGE_DIR_NAME, INDEX_LOCK_FILE_NAME, INDEX_METADATA_FILE_NAME, SCHEMA_VERSION_FILE_NAME, NOTES_TABLE_NAME, NOTES_TABLE_SCHEMA_VERSION, EMBEDDING_DIMENSIONS, FULL_REINDEX_REQUIRED_MESSAGE, SEARCH_RESULT_COLUMNS, NOTES_TABLE_SCHEMA, VaultIndexer;
 var init_store = __esm({
   "src/rag/store.ts"() {
     "use strict";
@@ -33397,13 +33460,16 @@ var init_store = __esm({
     INDEX_METADATA_FILE_NAME = "index-metadata.json";
     SCHEMA_VERSION_FILE_NAME = "schema-version.json";
     NOTES_TABLE_NAME = "notes";
-    NOTES_TABLE_SCHEMA_VERSION = 2;
+    NOTES_TABLE_SCHEMA_VERSION = 3;
     EMBEDDING_DIMENSIONS = 384;
     FULL_REINDEX_REQUIRED_MESSAGE = "RAG index schema version changed. Run obsidian_rag_index with force_reindex=true to rebuild the local index.";
+    SEARCH_RESULT_COLUMNS = ["id", "path", "text", "heading_path", "entities", "communities"];
     NOTES_TABLE_SCHEMA = new import_apache_arrow.Schema([
       new import_apache_arrow.Field("id", new import_apache_arrow.Utf8(), false),
       new import_apache_arrow.Field("path", new import_apache_arrow.Utf8(), false),
       new import_apache_arrow.Field("text", new import_apache_arrow.Utf8(), false),
+      new import_apache_arrow.Field("embedding_text", new import_apache_arrow.Utf8(), false),
+      new import_apache_arrow.Field("heading_path", new import_apache_arrow.Utf8(), false),
       new import_apache_arrow.Field("vector", new import_apache_arrow.FixedSizeList(EMBEDDING_DIMENSIONS, new import_apache_arrow.Field("item", new import_apache_arrow.Float32(), false)), false),
       new import_apache_arrow.Field("entities", new import_apache_arrow.List(new import_apache_arrow.Field("item", new import_apache_arrow.Utf8(), true)), false),
       new import_apache_arrow.Field("communities", new import_apache_arrow.List(new import_apache_arrow.Field("item", new import_apache_arrow.Utf8(), true)), false)
@@ -33507,18 +33573,21 @@ var init_store = __esm({
         }
         return null;
       }
+      // FTS targets embedding_text, not the clean text column: entity/community
+      // labels and heading breadcrumbs only exist in the metadata-wrapped copy,
+      // and keyword search must keep matching them for graph-term queries.
       async ensureFtsIndex(table) {
         try {
           const indices = await table.listIndices();
           const hasTextIndex = indices.some((index) => {
             const indexType = index.indexType ?? index.type;
-            return indexType === "FTS" && index.columns?.includes("text");
+            return indexType === "FTS" && index.columns?.includes("embedding_text");
           });
           if (hasTextIndex) {
             console.error("FTS index already exists");
             return;
           }
-          await table.createIndex("text", { config: lancedb.Index.fts() });
+          await table.createIndex("embedding_text", { config: lancedb.Index.fts() });
           console.error("created FTS index");
         } catch (error2) {
           console.error("error ensuring FTS index", error2);
@@ -33567,6 +33636,22 @@ var init_store = __esm({
           }
           return normalized;
         });
+      }
+      escapeSqlString(value) {
+        return value.replace(/'/g, "''");
+      }
+      buildArrayContainsPredicate(columnName, values) {
+        const uniqueValues = [...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))];
+        if (uniqueValues.length === 0) return null;
+        const predicates = uniqueValues.map((value) => `array_contains(${columnName}, '${this.escapeSqlString(value)}')`);
+        return predicates.length === 1 ? predicates[0] : `(${predicates.join(" OR ")})`;
+      }
+      buildSearchFilter(filters) {
+        const predicates = [
+          this.buildArrayContainsPredicate("entities", filters?.entities ?? []),
+          this.buildArrayContainsPredicate("communities", filters?.communities ?? [])
+        ].filter((predicate) => Boolean(predicate));
+        return predicates.length > 0 ? predicates.join(" AND ") : null;
       }
       async readNotesSchemaVersion(schemaVersionPath) {
         try {
@@ -33750,10 +33835,10 @@ var init_store = __esm({
         const uniquePaths = [...new Set(paths)];
         if (uniquePaths.length === 0) return;
         if (uniquePaths.length === 1) {
-          await table.delete(`path = '${uniquePaths[0].replace(/'/g, "''")}'`);
+          await table.delete(`path = '${this.escapeSqlString(uniquePaths[0])}'`);
           return;
         }
-        const escaped = uniquePaths.map((p) => `'${p.replace(/'/g, "''")}'`);
+        const escaped = uniquePaths.map((p) => `'${this.escapeSqlString(p)}'`);
         await table.delete(`path IN (${escaped.join(", ")})`);
       }
       async embedWithFallback(embedder, texts, meta3) {
@@ -34151,22 +34236,33 @@ var init_store = __esm({
         }
         return { stale: false };
       }
-      async search(query, vaultPath, limit = 5, workspacePath, vaultId) {
+      async search(query, vaultPath, limit = 5, workspacePath, vaultId, filters) {
         const release = await this.acquireLock();
         try {
+          const { schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+          const db = await this.getDb(vaultPath, workspacePath, vaultId);
+          if (await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
+            throw new Error(FULL_REINDEX_REQUIRED_MESSAGE);
+          }
           const table = await this.getTable(vaultPath, workspacePath, vaultId);
           if (!table) {
             return [];
           }
           const embedder = Embedder.getInstance();
           const vector = await embedder.embed(query);
-          try {
-            const results = await table.search(vector).fullTextSearch(query).limit(limit).toArray();
+          const filterPredicate = this.buildSearchFilter(filters);
+          const runSearch = async (search) => {
+            if (filterPredicate) search.where(filterPredicate);
+            search.select(SEARCH_RESULT_COLUMNS);
+            search.limit(limit);
+            const results = await search.toArray();
             return this.normalizeSearchResults(results);
+          };
+          try {
+            return await runSearch(table.search(vector).fullTextSearch(query));
           } catch (err) {
             console.error("FTS Hybrid Search failed, falling back to vector search. Consider running a full re-index.", err);
-            const results = await table.vectorSearch(vector).limit(limit).toArray();
-            return this.normalizeSearchResults(results);
+            return await runSearch(table.vectorSearch(vector));
           }
         } finally {
           release();
@@ -34292,6 +34388,19 @@ function booleanArg(value) {
 }
 function optionalString(value) {
   return value === void 0 || value === null ? void 0 : String(value);
+}
+function stringArrayArg(argName, value) {
+  if (value === void 0 || value === null) return [];
+  if (Array.isArray(value)) {
+    if (!value.every((item) => typeof item === "string")) {
+      throw new Error(`'${argName}' must be an array of strings or a comma-separated string.`);
+    }
+    return value.map((item) => item.trim()).filter((item) => item.length > 0);
+  }
+  if (typeof value === "string") {
+    return value.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
+  }
+  throw new Error(`'${argName}' must be an array of strings or a comma-separated string.`);
 }
 function filterSafeVaultFiles(vaultPath, files) {
   return files.filter((file2) => {
@@ -34591,7 +34700,7 @@ var obsidianTools = [
   },
   {
     name: "obsidian_rag_query",
-    description: "Perform a graph-aware semantic search on the indexed vault. Leverages injected metadata (entities, communities) to surface more relevant and contextually linked information.",
+    description: "Perform graph-aware semantic search on the indexed vault. Supports optional entity/community filters and returns clean chunk content with heading breadcrumbs.",
     inputSchema: {
       type: "object",
       properties: {
@@ -34614,6 +34723,16 @@ var obsidianTools = [
         vault_id: {
           type: "string",
           description: "Optional unique identifier for the vault"
+        },
+        entities: {
+          type: "array",
+          description: "Optional entity labels to require in matching chunks. Matched exactly (case-sensitive); comma-separated for CLI",
+          items: { type: "string" }
+        },
+        communities: {
+          type: "array",
+          description: "Optional community labels to require in matching chunks. Matched exactly (case-sensitive); comma-separated for CLI",
+          items: { type: "string" }
         }
       },
       required: ["query"]
@@ -34624,17 +34743,23 @@ var obsidianTools = [
       const vaultPath = context.getVaultPath(args.vault_path);
       const workspacePath = context.getWorkspacePath(args.workspace_path);
       const vaultId = context.getVaultId(args.vault_id);
+      const filters = {
+        entities: stringArrayArg("entities", args.entities),
+        communities: stringArrayArg("communities", args.communities)
+      };
       const [staleness, results] = await Promise.all([
         context.indexer.checkIndexStaleness(vaultPath, workspacePath, vaultId),
-        context.indexer.search(query, vaultPath, limit, workspacePath, vaultId)
+        context.indexer.search(query, vaultPath, limit, workspacePath, vaultId, filters)
       ]);
-      const text = results.map(
-        (result) => `---
-File: ${result.path}
+      const text = results.map((result) => {
+        const heading = typeof result.heading_path === "string" && result.heading_path.length > 0 ? `
+Heading: ${result.heading_path}` : "";
+        return `---
+File: ${result.path}${heading}
 Relevance: ${result._relevance_score ?? result._distance}
 Content: ${result.text}
----`
-      ).join("\n");
+---`;
+      }).join("\n");
       const staleNotice = staleness.stale ? `Index may be stale (${staleness.reason ?? "vault files changed"}). Run obsidian_rag_index to refresh.` : "";
       return [text, staleNotice].filter((part) => part.length > 0).join("\n\n");
     }
@@ -35137,6 +35262,9 @@ function parseCliValue(tool, key, value) {
   if (propertyType === "number") {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : value;
+  }
+  if (propertyType === "array") {
+    return String(value).split(",").map((item) => item.trim()).filter((item) => item.length > 0);
   }
   return value;
 }

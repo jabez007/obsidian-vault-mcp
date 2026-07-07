@@ -125,6 +125,76 @@ export interface SectionRange {
   level: number;
 }
 
+export interface MarkdownBreadcrumbBlock {
+  text: string;
+  headingPath: string;
+}
+
+/**
+ * Split markdown into paragraph blocks annotated with the active H1-H6 path.
+ * Fenced code blocks are kept intact: their lines (including blank lines and
+ * `#` comments) are treated as content, never as headings or block breaks.
+ */
+export function splitMarkdownByHeadingBreadcrumbs(content: string): MarkdownBreadcrumbBlock[] {
+  const blocks: MarkdownBreadcrumbBlock[] = [];
+  const headingStack: Array<{ level: number; text: string }> = [];
+  let currentLines: string[] = [];
+  let activeFence: string | null = null;
+
+  const flush = () => {
+    const text = currentLines.join('\n').trim();
+    if (text.length > 0) {
+      blocks.push({
+        text,
+        headingPath: headingStack.map((entry) => entry.text).join(' > '),
+      });
+    }
+    currentLines = [];
+  };
+
+  for (const line of content.split(/\r?\n/)) {
+    const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    if (activeFence) {
+      if (
+        fenceMatch &&
+        fenceMatch[1][0] === activeFence[0] &&
+        fenceMatch[1].length >= activeFence.length
+      ) {
+        activeFence = null;
+      }
+      currentLines.push(line);
+      continue;
+    }
+    if (fenceMatch) {
+      activeFence = fenceMatch[1];
+      currentLines.push(line);
+      continue;
+    }
+
+    const headingMatch = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    if (headingMatch) {
+      flush();
+      const level = headingMatch[1].length;
+      const headingText = headingMatch[2].replace(/\s+#+\s*$/, '').trim();
+      while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) {
+        headingStack.pop();
+      }
+      headingStack.push({ level, text: headingText });
+      continue;
+    }
+
+    if (line.trim().length === 0) {
+      flush();
+      continue;
+    }
+
+    currentLines.push(line);
+  }
+
+  flush();
+  return blocks;
+}
+
 /**
  * Find the range of a section under a heading in markdown content.
  * Returns null if heading not found.

@@ -14,7 +14,7 @@ Research a topic across the user's Obsidian vault using a multi-pass, graph-awar
 
 ## Workflow
 
-1. **Semantic Discovery** — Call `obsidian_rag_query` with the user's question. This surfaces the most relevant chunks, leveraging prepended graph metadata (`entities`, `communities`) for better contextual matching.
+1. **Semantic Discovery** — Call `obsidian_rag_query` with the user's question. Results carry clean note content plus a `Heading:` breadcrumb showing where each chunk sits in its note. To scope the search to a known topic area, pass the optional `entities` or `communities` parameters (exact, case-sensitive labels from note frontmatter) — only chunks tagged with a given label are returned.
 
 2. **Targeted Reading** — For each high-relevance result, call `obsidian_read_note` to get the full context. Skim for the most pertinent sections.
 

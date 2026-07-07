@@ -50,6 +50,11 @@ export interface IndexStaleness {
   reason?: string;
 }
 
+export interface SearchFilters {
+  entities?: string[];
+  communities?: string[];
+}
+
 interface IndexLockInfo {
   pid?: number;
   createdAt?: number;
@@ -67,15 +72,21 @@ const INDEX_LOCK_FILE_NAME = 'index.lock';
 const INDEX_METADATA_FILE_NAME = 'index-metadata.json';
 const SCHEMA_VERSION_FILE_NAME = 'schema-version.json';
 const NOTES_TABLE_NAME = 'notes';
-const NOTES_TABLE_SCHEMA_VERSION = 2;
+const NOTES_TABLE_SCHEMA_VERSION = 3;
 const EMBEDDING_DIMENSIONS = 384;
 const FULL_REINDEX_REQUIRED_MESSAGE =
   'RAG index schema version changed. Run obsidian_rag_index with force_reindex=true to rebuild the local index.';
+// Query results carry the clean text plus filterable metadata; embedding_text
+// (the metadata-wrapped embedder input, also the FTS target) and the raw
+// vector stay server-side.
+const SEARCH_RESULT_COLUMNS = ['id', 'path', 'text', 'heading_path', 'entities', 'communities'];
 
 const NOTES_TABLE_SCHEMA = new Schema([
   new Field('id', new Utf8(), false),
   new Field('path', new Utf8(), false),
   new Field('text', new Utf8(), false),
+  new Field('embedding_text', new Utf8(), false),
+  new Field('heading_path', new Utf8(), false),
   new Field('vector', new FixedSizeList(EMBEDDING_DIMENSIONS, new Field('item', new Float32(), false)), false),
   new Field('entities', new List(new Field('item', new Utf8(), true)), false),
   new Field('communities', new List(new Field('item', new Utf8(), true)), false),
@@ -220,19 +231,22 @@ export class VaultIndexer {
     return null;
   }
 
+  // FTS targets embedding_text, not the clean text column: entity/community
+  // labels and heading breadcrumbs only exist in the metadata-wrapped copy,
+  // and keyword search must keep matching them for graph-term queries.
   private async ensureFtsIndex(table: lancedb.Table) {
     try {
       const indices = await table.listIndices() as Array<{ columns?: string[]; indexType?: string; type?: string }>;
       const hasTextIndex = indices.some((index) => {
         const indexType = index.indexType ?? index.type;
-        return indexType === 'FTS' && index.columns?.includes('text');
+        return indexType === 'FTS' && index.columns?.includes('embedding_text');
       });
       if (hasTextIndex) {
         console.error('FTS index already exists');
         return;
       }
 
-      await table.createIndex('text', { config: lancedb.Index.fts() });
+      await table.createIndex('embedding_text', { config: lancedb.Index.fts() });
       console.error('created FTS index');
     } catch (error) {
       console.error('error ensuring FTS index', error);
@@ -294,6 +308,26 @@ export class VaultIndexer {
       }
       return normalized;
     });
+  }
+
+  private escapeSqlString(value: string): string {
+    return value.replace(/'/g, "''");
+  }
+
+  private buildArrayContainsPredicate(columnName: 'entities' | 'communities', values: string[]): string | null {
+    const uniqueValues = [...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))];
+    if (uniqueValues.length === 0) return null;
+    const predicates = uniqueValues.map((value) => `array_contains(${columnName}, '${this.escapeSqlString(value)}')`);
+    return predicates.length === 1 ? predicates[0] : `(${predicates.join(' OR ')})`;
+  }
+
+  private buildSearchFilter(filters?: SearchFilters): string | null {
+    const predicates = [
+      this.buildArrayContainsPredicate('entities', filters?.entities ?? []),
+      this.buildArrayContainsPredicate('communities', filters?.communities ?? []),
+    ].filter((predicate): predicate is string => Boolean(predicate));
+
+    return predicates.length > 0 ? predicates.join(' AND ') : null;
   }
 
   private async readNotesSchemaVersion(schemaVersionPath: string): Promise<number | null> {
@@ -511,11 +545,11 @@ export class VaultIndexer {
     if (uniquePaths.length === 0) return;
 
     if (uniquePaths.length === 1) {
-      await table.delete(`path = '${uniquePaths[0].replace(/'/g, "''")}'`);
+      await table.delete(`path = '${this.escapeSqlString(uniquePaths[0])}'`);
       return;
     }
 
-    const escaped = uniquePaths.map((p) => `'${p.replace(/'/g, "''")}'`);
+    const escaped = uniquePaths.map((p) => `'${this.escapeSqlString(p)}'`);
     await table.delete(`path IN (${escaped.join(', ')})`);
   }
 
@@ -1028,9 +1062,25 @@ export class VaultIndexer {
     return { stale: false };
   }
 
-  public async search(query: string, vaultPath: string, limit: number = 5, workspacePath?: string | null, vaultId?: string | null) {
+  public async search(
+    query: string,
+    vaultPath: string,
+    limit: number = 5,
+    workspacePath?: string | null,
+    vaultId?: string | null,
+    filters?: SearchFilters,
+  ) {
     const release = await this.acquireLock();
     try {
+      // Refuse to read an index built for another schema version, matching
+      // the write paths: silently serving old-shaped rows (or raw engine
+      // errors from filters on old column types) hides the needed migration.
+      const { schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+      const db = await this.getDb(vaultPath, workspacePath, vaultId);
+      if (await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
+        throw new Error(FULL_REINDEX_REQUIRED_MESSAGE);
+      }
+
       const table = await this.getTable(vaultPath, workspacePath, vaultId);
       if (!table) {
           return [];
@@ -1038,19 +1088,26 @@ export class VaultIndexer {
 
       const embedder = Embedder.getInstance();
       const vector = await embedder.embed(query);
+      const filterPredicate = this.buildSearchFilter(filters);
+
+      const runSearch = async (search: {
+        where(predicate: string): unknown;
+        select(columns: string[]): unknown;
+        limit(limit: number): unknown;
+        toArray(): Promise<unknown[]>;
+      }) => {
+        if (filterPredicate) search.where(filterPredicate);
+        search.select(SEARCH_RESULT_COLUMNS);
+        search.limit(limit);
+        const results = await search.toArray();
+        return this.normalizeSearchResults(results as Array<Record<string, unknown>>);
+      };
 
       try {
-        const results = await table.search(vector)
-            .fullTextSearch(query)
-            .limit(limit)
-            .toArray();
-        return this.normalizeSearchResults(results as Array<Record<string, unknown>>);
+        return await runSearch(table.search(vector).fullTextSearch(query));
       } catch (err) {
         console.error("FTS Hybrid Search failed, falling back to vector search. Consider running a full re-index.", err);
-        const results = await table.vectorSearch(vector)
-            .limit(limit)
-            .toArray();
-        return this.normalizeSearchResults(results as Array<Record<string, unknown>>);
+        return await runSearch(table.vectorSearch(vector));
       }
     } finally {
       release();

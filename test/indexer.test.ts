@@ -271,7 +271,7 @@ describe('VaultIndexer path resolution and storage', () => {
         const table = await db.openTable('notes');
         const rowCount = await table.countRows();
         const indices = await table.listIndices();
-        const ftsIndex = indices.find((idx: any) => idx.indexType === 'FTS' && idx.columns.includes('text'));
+        const ftsIndex = indices.find((idx: any) => idx.indexType === 'FTS' && idx.columns.includes('embedding_text'));
         return { rowCount, ftsIndex };
       } finally {
         if (typeof db.close === 'function') {
@@ -436,6 +436,11 @@ describe('VaultIndexer path resolution and storage', () => {
     expect(result.success).toBe(false);
     expect(result.message).toContain('force_reindex=true');
 
+    // Reads must refuse too: serving rows shaped for another schema version
+    // (or crashing on filters over old column types) would hide the migration.
+    await expect(indexer.search('note', vaultPath, 5, workspacePath))
+      .rejects.toThrow('force_reindex=true');
+
     const staleDb = await lancedb.connect(dbPath);
     try {
       const table = await staleDb.openTable('notes');
@@ -449,16 +454,24 @@ describe('VaultIndexer path resolution and storage', () => {
     const forcedResult = await indexer.indexVault(vaultPath, true, workspacePath);
     expect(forcedResult.success).toBe(true);
     await expect(fs.readFile(schemaVersionPath, 'utf-8'))
-      .resolves.toContain('"notesTableSchemaVersion":2');
+      .resolves.toContain('"notesTableSchemaVersion":3');
 
     const verifyDb = await lancedb.connect(dbPath);
     try {
       const table = await verifyDb.openTable('notes');
       const schema = await table.schema();
       expect(schema.fields.some((f: any) => f.name === 'entities')).toBe(true);
+      expect(schema.fields.some((f: any) => f.name === 'embedding_text')).toBe(true);
+      expect(schema.fields.some((f: any) => f.name === 'heading_path')).toBe(true);
       expect(schema.fields.find((f: any) => f.name === 'entities')?.type.toString()).toBe('List<Utf8>');
       expect(schema.fields.find((f: any) => f.name === 'vector')?.type.toString()).toBe('FixedSizeList[384]<Float32>');
       expect(await table.countRows()).toBe(1);
+
+      const indices = await table.listIndices() as Array<{ columns?: string[]; indexType?: string; type?: string }>;
+      const ftsColumns = indices
+        .filter((index) => (index.indexType ?? index.type) === 'FTS')
+        .flatMap((index) => index.columns ?? []);
+      expect(ftsColumns).toContain('embedding_text');
     } finally {
       if (typeof verifyDb.close === 'function') {
         verifyDb.close();
@@ -511,7 +524,7 @@ describe('VaultIndexer path resolution and storage', () => {
     expect(result.chunks).toBe(2);
   });
 
-  it('creates an FTS index on the text column during indexing', async () => {
+  it('creates an FTS index on the embedding_text column during indexing', async () => {
     await fs.writeFile(path.join(vaultPath, 'note.md'), 'This is a sufficiently long note to pass the minimum chunk size filter of forty characters.', 'utf-8');
     
     await indexer.indexVault(vaultPath, false, workspacePath);
@@ -525,7 +538,7 @@ describe('VaultIndexer path resolution and storage', () => {
       const table = await db.openTable('notes');
       const indices = await table.listIndices();
       
-      const ftsIndex = indices.find((idx: any) => idx.indexType === 'FTS' && idx.columns.includes('text'));
+      const ftsIndex = indices.find((idx: any) => idx.indexType === 'FTS' && idx.columns.includes('embedding_text'));
       expect(ftsIndex).toBeDefined();
     } finally {
       if (typeof db.close === 'function') {
@@ -542,11 +555,13 @@ describe('VaultIndexer path resolution and storage', () => {
 
     const mockSearchBuilder = {
       fullTextSearch: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       toArray: vi.fn().mockRejectedValue(simulatedError)
     };
 
     const mockVectorBuilder = {
+      select: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       toArray: vi.fn().mockResolvedValue([{ path: 'fallback-note.md', text: 'vector fallback result' }])
     };

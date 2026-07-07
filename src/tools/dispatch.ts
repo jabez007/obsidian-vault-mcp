@@ -56,6 +56,12 @@ function parseCliValue(tool: ObsidianTool, key: string, value: unknown): unknown
         const parsed = Number(value);
         return Number.isFinite(parsed) ? parsed : value;
     }
+    if (propertyType === "array") {
+        return String(value)
+            .split(",")
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0);
+    }
     return value;
 }
 

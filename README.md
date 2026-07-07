@@ -188,6 +188,7 @@ The first time you use a tool, the server can persist `vault_path`, `workspace_p
   - On first access, if `.gemini-obsidian` exists and `.obsidian-vault-mcp` does not, the server automatically migrates the old storage directory to the neutral name so existing indexes are preserved.
 - **Cache Reset**: If you suspect the index is corrupted or want a fresh start, you can manually delete the vault-specific folder (`.obsidian-vault-mcp/vaults/<vault_identifier>`) in your workspace or the corresponding entry in the global cache. The next time you run `obsidian_rag_index`, it will be recreated.
 - **Rebuild After Upgrading to 2.0.0**: version 2.0.0 replaced the embedding library (`@xenova/transformers` → `@huggingface/transformers`). Existing indexes still load — the model and its 384 dimensions are unchanged — but vectors embedded by the new stack are not numerically identical to old ones, so an index mixing pre- and post-upgrade chunks quietly degrades ranking quality. Run a one-time full rebuild after upgrading: `npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index --force_reindex`.
+- **Index Schema Migrations**: The index layout is stamped with a schema version (`schema-version.json`). After an upgrade that changes the layout (for example, the clean-text/heading-breadcrumb columns), both indexing and querying refuse with a message asking for a one-time `obsidian_rag_index` run with `force_reindex=true`; the rebuild restamps the version and everything resumes normally.
 - **Index Coordination & Freshness**: Each vault index directory uses an advisory `index.lock` so the session hook and MCP server do not update LanceDB and `file-hashes.json` at the same time. Queries compare markdown file counts and mtimes against the last successful index metadata; if files changed directly in Obsidian, `obsidian_rag_query` may append a stale-index notice asking you to run `obsidian_rag_index`. Restores that preserve both the file count and older timestamps (e.g. `git checkout`, sync rollbacks) are not detected by this heuristic — run `obsidian_rag_index` with `force_reindex` after those.
 - **Module Not Found Error**: If you see an error like `Cannot find module '@lancedb/lancedb'`, launch through `npx -y @jabez007/obsidian-vault-mcp@2` so npm installs runtime dependencies automatically. For local development, run `npm install && npm run build`.
 - **Logs**: Since this runs as an MCP server, errors are typically output to stderr.
@@ -244,7 +245,7 @@ The following tools are exposed through the MCP server for either host:
 
 ### Retrieval & Search
 - `obsidian_rag_index`: Index the vault for semantic search.
-- `obsidian_rag_query`: Perform a semantic search query.
+- `obsidian_rag_query`: Perform a semantic search query. Results carry clean note content plus a heading breadcrumb; optional `entities`/`communities` parameters (exact, case-sensitive frontmatter labels; comma-separated on the CLI) restrict results to chunks tagged with those labels.
 - `obsidian_search_notes`: Simple text/filename search.
 - `obsidian_list_notes`: List files in a folder.
 - `obsidian_read_note`: Read the full content of a note.

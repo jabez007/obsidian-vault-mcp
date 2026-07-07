@@ -79,6 +79,29 @@ function optionalString(value: unknown): string | undefined {
     return value === undefined || value === null ? undefined : String(value);
 }
 
+// A malformed filter must fail loudly: silently narrowing it to "no filter"
+// would present unfiltered results as filtered. Array items are matched
+// exactly (labels may contain commas); the string form is a comma-separated
+// convenience for CLI-style callers.
+function stringArrayArg(argName: string, value: unknown): string[] {
+    if (value === undefined || value === null) return [];
+    if (Array.isArray(value)) {
+        if (!value.every((item): item is string => typeof item === "string")) {
+            throw new Error(`'${argName}' must be an array of strings or a comma-separated string.`);
+        }
+        return value
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0);
+    }
+    if (typeof value === "string") {
+        return value
+            .split(",")
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0);
+    }
+    throw new Error(`'${argName}' must be an array of strings or a comma-separated string.`);
+}
+
 function filterSafeVaultFiles(vaultPath: string, files: string[]): string[] {
     return files.filter((file) => {
         try {
@@ -402,7 +425,7 @@ export const obsidianTools: ObsidianTool[] = [
     {
         name: "obsidian_rag_query",
         description:
-            "Perform a graph-aware semantic search on the indexed vault. Leverages injected metadata (entities, communities) to surface more relevant and contextually linked information.",
+            "Perform graph-aware semantic search on the indexed vault. Supports optional entity/community filters and returns clean chunk content with heading breadcrumbs.",
         inputSchema: {
             type: "object",
             properties: {
@@ -426,6 +449,16 @@ export const obsidianTools: ObsidianTool[] = [
                     type: "string",
                     description: "Optional unique identifier for the vault",
                 },
+                entities: {
+                    type: "array",
+                    description: "Optional entity labels to require in matching chunks. Matched exactly (case-sensitive); comma-separated for CLI",
+                    items: { type: "string" },
+                },
+                communities: {
+                    type: "array",
+                    description: "Optional community labels to require in matching chunks. Matched exactly (case-sensitive); comma-separated for CLI",
+                    items: { type: "string" },
+                },
             },
             required: ["query"],
         },
@@ -435,15 +468,21 @@ export const obsidianTools: ObsidianTool[] = [
             const vaultPath = context.getVaultPath(args.vault_path);
             const workspacePath = context.getWorkspacePath(args.workspace_path);
             const vaultId = context.getVaultId(args.vault_id);
+            const filters = {
+                entities: stringArrayArg("entities", args.entities),
+                communities: stringArrayArg("communities", args.communities),
+            };
             const [staleness, results] = await Promise.all([
                 context.indexer.checkIndexStaleness(vaultPath, workspacePath, vaultId),
-                context.indexer.search(query, vaultPath, limit, workspacePath, vaultId),
+                context.indexer.search(query, vaultPath, limit, workspacePath, vaultId, filters),
             ]);
             const text = results
-                .map(
-                    (result) =>
-                        `---\nFile: ${result.path}\nRelevance: ${result._relevance_score ?? result._distance}\nContent: ${result.text}\n---`,
-                )
+                .map((result) => {
+                    const heading = typeof result.heading_path === "string" && result.heading_path.length > 0
+                        ? `\nHeading: ${result.heading_path}`
+                        : "";
+                    return `---\nFile: ${result.path}${heading}\nRelevance: ${result._relevance_score ?? result._distance}\nContent: ${result.text}\n---`;
+                })
                 .join("\n");
             const staleNotice = staleness.stale
                 ? `Index may be stale (${staleness.reason ?? "vault files changed"}). Run obsidian_rag_index to refresh.`

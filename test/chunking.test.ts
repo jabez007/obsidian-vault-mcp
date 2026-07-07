@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitTextForEmbedding, mergeSegmentsForEmbedding, buildEmbeddingInputs } from '../src/rag/chunking';
+import { splitTextForEmbedding, mergeTextSegments, buildEmbeddingInputs } from '../src/rag/chunking';
 
 describe('splitTextForEmbedding', () => {
   it('returns short text as-is', () => {
@@ -42,30 +42,37 @@ describe('splitTextForEmbedding', () => {
   });
 });
 
-describe('mergeSegmentsForEmbedding', () => {
+describe('mergeTextSegments', () => {
+  const seg = (text: string, headingPath = '') => ({ text, headingPath });
+
   it('returns empty array for empty input', () => {
-    expect(mergeSegmentsForEmbedding([], 100)).toEqual([]);
+    expect(mergeTextSegments([], 100)).toEqual([]);
   });
 
   it('returns single segment unchanged', () => {
-    expect(mergeSegmentsForEmbedding(['hello'], 100)).toEqual(['hello']);
+    expect(mergeTextSegments([seg('hello')], 100)).toEqual([seg('hello')]);
   });
 
   it('merges small segments with double-newline separator', () => {
-    const result = mergeSegmentsForEmbedding(['aaa', 'bbb'], 100);
-    expect(result).toEqual(['aaa\n\nbbb']);
+    const result = mergeTextSegments([seg('aaa'), seg('bbb')], 100);
+    expect(result).toEqual([seg('aaa\n\nbbb')]);
   });
 
   it('keeps large segments standalone', () => {
     const large = 'a'.repeat(100);
-    const result = mergeSegmentsForEmbedding([large, 'small'], 100);
-    expect(result).toEqual([large, 'small']);
+    const result = mergeTextSegments([seg(large), seg('small')], 100);
+    expect(result).toEqual([seg(large), seg('small')]);
   });
 
   it('does not merge beyond target size', () => {
-    const result = mergeSegmentsForEmbedding(['aaaa', 'bbbb', 'cccc'], 10);
+    const result = mergeTextSegments([seg('aaaa'), seg('bbbb'), seg('cccc')], 10);
     // 'aaaa\n\nbbbb' = 10 chars, fits. 'cccc' would push past, so separate.
-    expect(result).toEqual(['aaaa\n\nbbbb', 'cccc']);
+    expect(result).toEqual([seg('aaaa\n\nbbbb'), seg('cccc')]);
+  });
+
+  it('does not merge segments with different heading paths', () => {
+    const result = mergeTextSegments([seg('aaa', 'Alpha'), seg('bbb', 'Beta')], 100);
+    expect(result).toEqual([seg('aaa', 'Alpha'), seg('bbb', 'Beta')]);
   });
 });
 
@@ -108,6 +115,57 @@ describe('buildEmbeddingInputs', () => {
 
     expect(result.chunkMetadata[0].entities).toEqual(['AI', 'Climate Change']);
     expect(result.chunkMetadata[0].communities).toEqual(['Technology']);
+  });
+
+  it('stores clean text separately from contextual embedding text', () => {
+    const body = '# Strategy\n\nA paragraph long enough to be included in the output chunks.';
+    const result = buildEmbeddingInputs('test.md', body, {
+      graphMetadata: {
+        entities: ['AI'],
+        communities: ['Technology'],
+      },
+    });
+
+    expect(result.chunkMetadata[0].text).toBe('A paragraph long enough to be included in the output chunks.');
+    expect(result.chunkMetadata[0].embedding_text).toContain('[METADATA: Entities: AI | Communities: Technology | Heading: Strategy]');
+    expect(result.chunkMetadata[0].heading_path).toBe('Strategy');
+    expect(result.textsToEmbed[0]).toBe(result.chunkMetadata[0].embedding_text);
+  });
+
+  it('drops breadcrumb detail before graph metadata when context is truncated', () => {
+    const body = `# ${'Very Long Heading Title '.repeat(10).trim()}\n\n${'x'.repeat(400)}`;
+    const result = buildEmbeddingInputs('test.md', body, {
+      maxChunkChars: 400,
+      targetChunkChars: 400,
+      graphMetadata: { entities: ['AI'], communities: [] },
+    });
+
+    const embedded = result.textsToEmbed[0];
+    expect(embedded).toContain('Entities: AI');
+    expect(embedded.length).toBeLessThanOrEqual(400);
+  });
+
+  it('does not truncate base text more than the actual context needs', () => {
+    const text = 'y'.repeat(400);
+    const result = buildEmbeddingInputs('test.md', `# Ab\n\n${text}`, {
+      maxChunkChars: 400,
+      targetChunkChars: 400,
+    });
+
+    // Context is 'Heading: Ab' (11 chars) + 14 wrapper chars; only that much
+    // of the base text may be sacrificed, not the historical 20-char floor.
+    expect(result.textsToEmbed[0]).toBe(`[METADATA: Heading: Ab]\n\n${'y'.repeat(400 - 14 - 11)}`);
+  });
+
+  it('does not merge chunks across different heading breadcrumbs', () => {
+    const body = '# Alpha\n\nA paragraph long enough to be included under the alpha heading.\n\n## Beta\n\nA paragraph long enough to be included under the beta heading.';
+    const result = buildEmbeddingInputs('test.md', body, {
+      minChunkChars: 10,
+      maxChunkChars: 500,
+      targetChunkChars: 500,
+    });
+
+    expect(result.chunkMetadata.map((chunk) => chunk.heading_path)).toEqual(['Alpha', 'Alpha > Beta']);
   });
 
   it('respects custom options', () => {

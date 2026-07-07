@@ -25,7 +25,7 @@
     "plugins/obsidian-vault-mcp/"
   ],
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js --format=cjs --external:@lancedb/lancedb --external:@huggingface/transformers --banner:js=\"var import_meta = { url: 'file://' + __filename };\" --define:import.meta=import_meta",
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js --format=cjs --external:@lancedb/lancedb --external:@huggingface/transformers --external:apache-arrow --banner:js=\"var import_meta = { url: 'file://' + __filename };\" --define:import.meta=import_meta",
     "sync-assets": "node scripts/sync-assets.mjs",
     "lint": "eslint . --ext .ts",
     "type-check": "tsc --noEmit",
@@ -61,6 +61,7 @@
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
     "@lancedb/lancedb": "^0.27.2",
+    "apache-arrow": "^18.1.0",
     "moment": "^2.30.1"
   },
   "devDependencies": {
