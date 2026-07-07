@@ -163,6 +163,15 @@ colon-separated list of absolute roots. `CODEX_OBSIDIAN_ALLOWED_VAULTS` and
 before enforcing the boundary, and applies the same containment check to
 `workspace_path` because it creates index and cache directories.
 
+For note paths, the server also resolves the deepest existing target ancestor
+before reads and writes. A symlink inside the vault that points outside the vault
+is blocked by default, even if the path looks like it is under the vault. Vault
+scans and RAG indexing still follow symlinked folders, but each followed file is
+kept only when its real path remains inside the vault or inside an
+`OBSIDIAN_ALLOWED_VAULTS` root. If your vault intentionally links to another
+folder, add both the vault and the linked folder's real parent/root to
+`OBSIDIAN_ALLOWED_VAULTS`.
+
 ### Option 2: Runtime configuration
 
 The first time you use a tool, the server can persist `vault_path`, `workspace_path`, and `vault_id`. The config source of truth is now `~/.obsidian-mcp.config.json`. The server still reads the legacy `~/.gemini-obsidian.config.json` as a fallback, but new writes no longer update that legacy file.

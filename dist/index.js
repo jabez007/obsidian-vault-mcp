@@ -7406,7 +7406,7 @@ var require_parse = __commonJS({
 var require_gray_matter = __commonJS({
   "node_modules/gray-matter/index.js"(exports2, module2) {
     "use strict";
-    var fs6 = require("fs");
+    var fs7 = require("fs");
     var sections = require_section_matter();
     var defaults = require_defaults();
     var stringify = require_stringify();
@@ -7490,7 +7490,7 @@ var require_gray_matter = __commonJS({
       return stringify(file2, data, options2);
     };
     matter3.read = function(filepath, options2) {
-      const str2 = fs6.readFileSync(filepath, "utf8");
+      const str2 = fs7.readFileSync(filepath, "utf8");
       const file2 = matter3(str2, options2);
       file2.path = filepath;
       return file2;
@@ -7519,10 +7519,74 @@ var require_gray_matter = __commonJS({
 });
 
 // src/utils.ts
+function getFirstEnv(...keys) {
+  for (const key of keys) {
+    const value = process.env[key];
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+function parseAllowedVaultRoots() {
+  const raw = getFirstEnv(
+    "OBSIDIAN_ALLOWED_VAULTS",
+    "CODEX_OBSIDIAN_ALLOWED_VAULTS",
+    "GEMINI_OBSIDIAN_ALLOWED_VAULTS"
+  );
+  if (!raw) return null;
+  return raw.split(path.delimiter).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+}
+function entryExists(candidatePath) {
+  try {
+    fs.lstatSync(candidatePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function resolveRealPathAllowMissing(candidatePath, symlinkDepth = 0) {
+  if (!path.isAbsolute(candidatePath)) {
+    throw new Error(`Path must be absolute: ${candidatePath}`);
+  }
+  if (symlinkDepth > MAX_SYMLINK_DEPTH) {
+    throw new Error(`Too many symbolic links: ${candidatePath}`);
+  }
+  const resolvedPath = path.resolve(candidatePath);
+  let existingPath = resolvedPath;
+  const missingParts = [];
+  while (!entryExists(existingPath)) {
+    const parent = path.dirname(existingPath);
+    if (parent === existingPath) break;
+    missingParts.unshift(path.basename(existingPath));
+    existingPath = parent;
+  }
+  let realExistingPath;
+  try {
+    realExistingPath = fs.realpathSync.native(existingPath);
+  } catch {
+    const linkTarget = fs.readlinkSync(existingPath);
+    realExistingPath = resolveRealPathAllowMissing(
+      path.resolve(path.dirname(existingPath), linkTarget),
+      symlinkDepth + 1
+    );
+  }
+  return missingParts.length > 0 ? path.join(realExistingPath, ...missingParts) : realExistingPath;
+}
+function isPathContainedByRoot(candidatePath, rootPath) {
+  const relativePath = path.relative(rootPath, candidatePath);
+  return relativePath === "" || !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
+}
 function getSafeFilePath(vaultPath, userInputPath) {
   const resolvedVault = path.resolve(vaultPath);
   const resolvedTarget = path.resolve(resolvedVault, userInputPath);
   if (!resolvedTarget.startsWith(resolvedVault + path.sep) && resolvedTarget !== resolvedVault) {
+    throw new Error("Security Error: Path traversal detected.");
+  }
+  const realVault = resolveRealPathAllowMissing(resolvedVault);
+  const realTarget = resolveRealPathAllowMissing(resolvedTarget);
+  const allowedRoots = [realVault, ...(parseAllowedVaultRoots() ?? []).map((root) => resolveRealPathAllowMissing(root))];
+  if (!allowedRoots.some((root) => isPathContainedByRoot(realTarget, root))) {
     throw new Error("Security Error: Path traversal detected.");
   }
   return resolvedTarget;
@@ -7597,12 +7661,14 @@ function applyFrontmatterUpdate(fileContent, update) {
   }
   return import_gray_matter.default.stringify(parsed.content, parsed.data);
 }
-var path, import_gray_matter;
+var path, fs, import_gray_matter, MAX_SYMLINK_DEPTH;
 var init_utils = __esm({
   "src/utils.ts"() {
     "use strict";
     path = __toESM(require("path"));
+    fs = __toESM(require("fs"));
     import_gray_matter = __toESM(require_gray_matter());
+    MAX_SYMLINK_DEPTH = 40;
   }
 });
 
@@ -7611,7 +7677,7 @@ function Ht(n7) {
   return isNaN(n7) ? n7.charCodeAt(0) : parseInt(n7, 10);
 }
 function ps(n7) {
-  return n7.replace(as, fe).replace(ls, ue).replace(cs, qt).replace(fs2, de).replace(us, pe);
+  return n7.replace(as, fe).replace(ls, ue).replace(cs, qt).replace(fs3, de).replace(us, pe);
 }
 function ms(n7) {
   return n7.replace(is, "\\").replace(rs, "{").replace(ns, "}").replace(os, ",").replace(hs, ".");
@@ -7703,7 +7769,7 @@ function Ut(n7, t = {}) {
 function es(n7, t = {}) {
   return new I(n7, t).iterate();
 }
-var import_node_url, import_node_path, import_node_url2, import_fs, xi, import_promises, import_node_events, import_node_stream, import_node_string_decoder, Gt, ce, ss, fe, ue, qt, de, pe, is, rs, ns, os, hs, as, ls, cs, fs2, us, ds, at, Ss, lt, Es, we, ye, W, xs, be, vs, Ct, Cs, Ts, As, ks, Kt, Se, Ee, Q, tt, O, Rs, Os, Fs, Ds, Ms, Ns, _s, Ls, Ws, Ps, js, Is, zs, Bs, Us, $s, Gs, Hs, Ce, Te, Ae, xe, qs, A, Ks, Vs, Ys, Xs, Js, N, Zs, ke, Qs, ti, ve, ei, D, si, Oe, Vt, Fe, At, Re, ii, q, De, Tt, ri, ft, Ne, oi, hi, ai, G, H, K, kt, ut, Rt, _e, Ot, Le, P, et, v, dt, st, C, F, T, Yt, Ft, k, x, Xt, Jt, We, Zt, B, Qt, Dt, pt, Y, M, mt, li, ci, fi, ui, Mt, te, di, pi, V, vi, wt, Ue, $e, Ri, Oi, L, Ge, He, U, qe, Ke, X, Ve, _, gt, se, je, yt, j, Nt, Lt, Ie, Fi, ie, ze, bt, Be, _t, Wt, ne, Ye, R, Pt, jt, It, it, rt, St, Cr, Xe, Di, Mi, Ni, nt, _i, ot, oe, he, ae, Et, Li, zt, xt, vt, Pi, I, le, ji, Ii, zi, Bi, Ui, Ze;
+var import_node_url, import_node_path, import_node_url2, import_fs, xi, import_promises, import_node_events, import_node_stream, import_node_string_decoder, Gt, ce, ss, fe, ue, qt, de, pe, is, rs, ns, os, hs, as, ls, cs, fs3, us, ds, at, Ss, lt, Es, we, ye, W, xs, be, vs, Ct, Cs, Ts, As, ks, Kt, Se, Ee, Q, tt, O, Rs, Os, Fs, Ds, Ms, Ns, _s, Ls, Ws, Ps, js, Is, zs, Bs, Us, $s, Gs, Hs, Ce, Te, Ae, xe, qs, A, Ks, Vs, Ys, Xs, Js, N, Zs, ke, Qs, ti, ve, ei, D, si, Oe, Vt, Fe, At, Re, ii, q, De, Tt, ri, ft, Ne, oi, hi, ai, G, H, K, kt, ut, Rt, _e, Ot, Le, P, et, v, dt, st, C, F, T, Yt, Ft, k, x, Xt, Jt, We, Zt, B, Qt, Dt, pt, Y, M, mt, li, ci, fi, ui, Mt, te, di, pi, V, vi, wt, Ue, $e, Ri, Oi, L, Ge, He, U, qe, Ke, X, Ve, _, gt, se, je, yt, j, Nt, Lt, Ie, Fi, ie, ze, bt, Be, _t, Wt, ne, Ye, R, Pt, jt, It, it, rt, St, Cr, Xe, Di, Mi, Ni, nt, _i, ot, oe, he, ae, Et, Li, zt, xt, vt, Pi, I, le, ji, Ii, zi, Bi, Ui, Ze;
 var init_index_min = __esm({
   "node_modules/glob/dist/esm/index.min.js"() {
     import_node_url = require("node:url");
@@ -7752,7 +7818,7 @@ var init_index_min = __esm({
     as = /\\\\/g;
     ls = /\\{/g;
     cs = /\\}/g;
-    fs2 = /\\,/g;
+    fs3 = /\\,/g;
     us = /\\./g;
     ds = 1e5;
     at = (n7) => {
@@ -24715,7 +24781,7 @@ var init_protocol = __esm({
               return;
             }
             const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-            await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
+            await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
             options2?.signal?.throwIfAborted();
           }
         } catch (error2) {
@@ -24732,7 +24798,7 @@ var init_protocol = __esm({
        */
       request(request, resultSchema, options2) {
         const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options2 ?? {};
-        return new Promise((resolve4, reject) => {
+        return new Promise((resolve3, reject) => {
           const earlyReject = (error2) => {
             reject(error2);
           };
@@ -24810,7 +24876,7 @@ var init_protocol = __esm({
               if (!parseResult.success) {
                 reject(parseResult.error);
               } else {
-                resolve4(parseResult.data);
+                resolve3(parseResult.data);
               }
             } catch (error2) {
               reject(error2);
@@ -25071,12 +25137,12 @@ var init_protocol = __esm({
           }
         } catch {
         }
-        return new Promise((resolve4, reject) => {
+        return new Promise((resolve3, reject) => {
           if (signal.aborted) {
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
             return;
           }
-          const timeoutId = setTimeout(resolve4, interval);
+          const timeoutId = setTimeout(resolve3, interval);
           signal.addEventListener("abort", () => {
             clearTimeout(timeoutId);
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -28103,7 +28169,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve4.call(this, root, ref);
+      let _sch = resolve3.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a2 = root.localRefs) === null || _a2 === void 0 ? void 0 : _a2[ref];
         const { schemaId } = this.opts;
@@ -28130,7 +28196,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve4(root, ref) {
+    function resolve3(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -28705,7 +28771,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve4(baseURI, relativeURI, options2) {
+    function resolve3(baseURI, relativeURI, options2) {
       const schemelessOptions = options2 ? Object.assign({ scheme: "null" }, options2) : { scheme: "null" };
       const resolved = resolveComponent(parse4(baseURI, schemelessOptions), parse4(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -28932,7 +28998,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve4,
+      resolve: resolve3,
       resolveComponent,
       equal,
       serialize,
@@ -31908,12 +31974,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs6, exportName) {
+    function addFormats(ajv, list, fs7, exportName) {
       var _a2;
       var _b;
       (_a2 = (_b = ajv.opts.code).formats) !== null && _a2 !== void 0 ? _a2 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs6[f]);
+        ajv.addFormat(f, fs7[f]);
     }
     module2.exports = exports2 = formatsPlugin;
     Object.defineProperty(exports2, "__esModule", { value: true });
@@ -32740,12 +32806,12 @@ var init_stdio2 = __esm({
         this.onclose?.();
       }
       send(message) {
-        return new Promise((resolve4) => {
+        return new Promise((resolve3) => {
           const json2 = serializeMessage(message);
           if (this._stdout.write(json2)) {
-            resolve4();
+            resolve3();
           } else {
-            this._stdout.once("drain", resolve4);
+            this._stdout.once("drain", resolve3);
           }
         });
       }
@@ -33205,12 +33271,12 @@ function chunkingOptionsFromEnv() {
   const target = Number.isFinite(targetRaw) && targetRaw > min ? Math.floor(targetRaw) : 700;
   return { minChunkChars: min, maxChunkChars: max, targetChunkChars: target };
 }
-var lancedb, fs4, path4, os2, import_gray_matter2, import_md52, STORAGE_DIR_NAME, LEGACY_STORAGE_DIR_NAME, VaultIndexer;
+var lancedb, fs5, path4, os2, import_gray_matter2, import_md52, STORAGE_DIR_NAME, LEGACY_STORAGE_DIR_NAME, VaultIndexer;
 var init_store = __esm({
   "src/rag/store.ts"() {
     "use strict";
     lancedb = __toESM(require("@lancedb/lancedb"));
-    fs4 = __toESM(require("fs/promises"));
+    fs5 = __toESM(require("fs/promises"));
     path4 = __toESM(require("path"));
     os2 = __toESM(require("os"));
     init_index_min();
@@ -33229,8 +33295,8 @@ var init_store = __esm({
       }
       async acquireLock() {
         let release;
-        const nextLock = new Promise((resolve4) => {
-          release = resolve4;
+        const nextLock = new Promise((resolve3) => {
+          release = resolve3;
         });
         const wait = this.lock;
         this.lock = nextLock;
@@ -33280,21 +33346,21 @@ var init_store = __esm({
         const baseStorePath = path4.join(storageRoot, "vaults", vaultIdentifier);
         const dbPath = path4.join(baseStorePath, "lancedb");
         const hashPath = path4.join(baseStorePath, "file-hashes.json");
-        await fs4.mkdir(baseStorePath, { recursive: true });
+        await fs5.mkdir(baseStorePath, { recursive: true });
         return { dbPath, hashPath };
       }
       async getStorageRoot(storageParent) {
         const newRoot = path4.join(storageParent, STORAGE_DIR_NAME);
         const oldRoot = path4.join(storageParent, LEGACY_STORAGE_DIR_NAME);
         const [newExists, oldExists] = await Promise.all([
-          fs4.stat(newRoot).then(() => true).catch(() => false),
-          fs4.stat(oldRoot).then(() => true).catch(() => false)
+          fs5.stat(newRoot).then(() => true).catch(() => false),
+          fs5.stat(oldRoot).then(() => true).catch(() => false)
         ]);
         if (!newExists && oldExists) {
           try {
-            await fs4.rename(oldRoot, newRoot);
+            await fs5.rename(oldRoot, newRoot);
           } catch (error2) {
-            const migrated = await fs4.stat(newRoot).then(() => true).catch(() => false);
+            const migrated = await fs5.stat(newRoot).then(() => true).catch(() => false);
             if (!migrated) throw error2;
           }
         }
@@ -33336,8 +33402,8 @@ var init_store = __esm({
       }
       async writeHashesAtomic(hashPath, hashes) {
         const tmpPath = `${hashPath}.tmp`;
-        await fs4.writeFile(tmpPath, JSON.stringify(hashes), "utf-8");
-        await fs4.rename(tmpPath, hashPath);
+        await fs5.writeFile(tmpPath, JSON.stringify(hashes), "utf-8");
+        await fs5.rename(tmpPath, hashPath);
       }
       async deleteRowsForPaths(table, paths) {
         const uniquePaths = [...new Set(paths)];
@@ -33381,7 +33447,7 @@ var init_store = __esm({
           const { hashPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
           const embedder = Embedder.getInstance();
           const filePath = getSafeFilePath(vaultPath, relativePath);
-          const content = await fs4.readFile(filePath, "utf-8");
+          const content = await fs5.readFile(filePath, "utf-8");
           const contentHash = (0, import_md52.default)(content);
           const { content: body, data: metadata } = (0, import_gray_matter2.default)(content);
           const chunkingOptions = chunkingOptionsFromEnv();
@@ -33392,7 +33458,7 @@ var init_store = __esm({
           const { textsToEmbed, chunkMetadata } = buildEmbeddingInputs(normalizedPath, body, chunkingOptions);
           let hashes = {};
           try {
-            hashes = JSON.parse(await fs4.readFile(hashPath, "utf-8"));
+            hashes = JSON.parse(await fs5.readFile(hashPath, "utf-8"));
           } catch {
           }
           const db = await this.getDb(vaultPath, workspacePath, vaultId);
@@ -33450,12 +33516,22 @@ var init_store = __esm({
           const { hashPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
           const embedder = Embedder.getInstance();
           const db = await this.getDb(vaultPath, workspacePath, vaultId);
-          const files = await Ze("**/*.md", { cwd: vaultPath, absolute: true, follow: true });
+          const discoveredFiles = await Ze("**/*.md", { cwd: vaultPath, absolute: true, follow: true });
+          const files = discoveredFiles.filter((filePath) => {
+            const relativePath = path4.relative(vaultPath, filePath).replace(/\\/g, "/");
+            try {
+              getSafeFilePath(vaultPath, relativePath);
+              return true;
+            } catch (error2) {
+              console.error(`Skipping out-of-bounds indexed file ${relativePath}: ${error2?.message ?? String(error2)}`);
+              return false;
+            }
+          });
           console.error(`Found ${files.length} notes in ${vaultPath}`);
           let previousHashes = {};
           if (!force) {
             try {
-              previousHashes = JSON.parse(await fs4.readFile(hashPath, "utf-8"));
+              previousHashes = JSON.parse(await fs5.readFile(hashPath, "utf-8"));
             } catch {
             }
           }
@@ -33507,7 +33583,7 @@ var init_store = __esm({
             const results = await Promise.all(
               batch.map(async (filePath) => {
                 try {
-                  const content = await fs4.readFile(filePath, "utf-8");
+                  const content = await fs5.readFile(filePath, "utf-8");
                   const relativePathRaw = path4.relative(vaultPath, filePath);
                   const relativePath = relativePathRaw.replace(/\\/g, "/");
                   const contentHash = (0, import_md52.default)(content);
@@ -33687,7 +33763,7 @@ var init_store = __esm({
           const { hashPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
           const embedder = Embedder.getInstance();
           const filePath = getSafeFilePath(vaultPath, destRelativePath);
-          const content = await fs4.readFile(filePath, "utf-8");
+          const content = await fs5.readFile(filePath, "utf-8");
           const contentHash = (0, import_md52.default)(content);
           const { content: body, data: metadata } = (0, import_gray_matter2.default)(content);
           const chunkingOptions = chunkingOptionsFromEnv();
@@ -33699,7 +33775,7 @@ var init_store = __esm({
           const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];
           let hashes = {};
           try {
-            hashes = JSON.parse(await fs4.readFile(hashPath, "utf-8"));
+            hashes = JSON.parse(await fs5.readFile(hashPath, "utf-8"));
           } catch {
           }
           const db = await this.getDb(vaultPath, workspacePath, vaultId);
@@ -33789,21 +33865,28 @@ __export(index_exports, {
   main: () => main
 });
 module.exports = __toCommonJS(index_exports);
-var nodeFs = __toESM(require("fs"));
-var fs5 = __toESM(require("fs/promises"));
+var fs6 = __toESM(require("fs/promises"));
 var path5 = __toESM(require("path"));
 var os3 = __toESM(require("os"));
 
 // src/daily-note.ts
-var fs = __toESM(require("fs/promises"));
+var fs2 = __toESM(require("fs/promises"));
 var path2 = __toESM(require("path"));
 var import_moment = __toESM(require_moment());
 init_utils();
 var DEFAULT_DAILY_NOTE_FORMAT = "YYYY-MM-DD";
 async function getDailyNoteConfig(vaultPath) {
-  const configPath = path2.join(vaultPath, ".obsidian", "daily-notes.json");
+  let configPath;
   try {
-    const data = await fs.readFile(configPath, "utf-8");
+    configPath = getSafeFilePath(vaultPath, path2.join(".obsidian", "daily-notes.json"));
+  } catch {
+    console.error(
+      "Daily-notes config resolves outside the vault boundary; using defaults. Add the real .obsidian location to OBSIDIAN_ALLOWED_VAULTS to use it."
+    );
+    return { folder: "", format: DEFAULT_DAILY_NOTE_FORMAT };
+  }
+  try {
+    const data = await fs2.readFile(configPath, "utf-8");
     const config2 = JSON.parse(data);
     let folder = String(config2.folder || "").trim();
     folder = folder.replace(/^[\\/]+|[\\/]+$/g, "");
@@ -33828,19 +33911,22 @@ async function getOrCreateDailyNote(vaultPath) {
   const filePath = getSafeFilePath(vaultPath, relativePath);
   let content = "";
   try {
-    content = await fs.readFile(filePath, "utf-8");
+    content = await fs2.readFile(filePath, "utf-8");
   } catch {
-    await fs.mkdir(path2.dirname(filePath), { recursive: true });
+    await fs2.mkdir(path2.dirname(filePath), { recursive: true });
     content = `# ${(0, import_moment.default)().format(dailyConfig.format)}
 
 `;
-    await fs.writeFile(filePath, content, "utf-8");
+    await fs2.writeFile(filePath, content, "utf-8");
   }
   return { file_path: path2.relative(vaultPath, filePath), content };
 }
 
+// src/index.ts
+init_utils();
+
 // src/tools/registry.ts
-var fs3 = __toESM(require("fs/promises"));
+var fs4 = __toESM(require("fs/promises"));
 var path3 = __toESM(require("path"));
 init_index_min();
 init_utils();
@@ -33880,6 +33966,17 @@ function booleanArg(value) {
 }
 function optionalString(value) {
   return value === void 0 || value === null ? void 0 : String(value);
+}
+function filterSafeVaultFiles(vaultPath, files) {
+  return files.filter((file2) => {
+    try {
+      getSafeFilePath(vaultPath, file2);
+      return true;
+    } catch (error2) {
+      console.error(`Skipping out-of-bounds vault file ${file2}: ${error2?.message ?? String(error2)}`);
+      return false;
+    }
+  });
 }
 var obsidianTools = [
   {
@@ -33941,7 +34038,10 @@ var obsidianTools = [
     async handler(args, context) {
       const vaultPath = context.getVaultPath(args.vault_path);
       const pattern = listNotesPattern(optionalString(args.subfolder));
-      const files = await Ze(pattern, { cwd: vaultPath, follow: true });
+      const files = filterSafeVaultFiles(
+        vaultPath,
+        await Ze(pattern, { cwd: vaultPath, follow: true })
+      );
       return JSON.stringify(files.slice(0, 100), null, 2) + (files.length > 100 ? `
 ...and ${files.length - 100} more.` : "");
     }
@@ -33966,7 +34066,7 @@ var obsidianTools = [
     async handler(args, context) {
       const vaultPath = context.getVaultPath(args.vault_path);
       const filePath = getSafeFilePath(vaultPath, String(args.file_path));
-      return fs3.readFile(filePath, "utf-8");
+      return fs4.readFile(filePath, "utf-8");
     }
   },
   {
@@ -34005,8 +34105,8 @@ var obsidianTools = [
       const relativePath = String(args.file_path);
       const filePath = getSafeFilePath(vaultPath, relativePath);
       const content = String(args.content || "");
-      await fs3.mkdir(path3.dirname(filePath), { recursive: true });
-      await fs3.writeFile(filePath, content, "utf-8");
+      await fs4.mkdir(path3.dirname(filePath), { recursive: true });
+      await fs4.writeFile(filePath, content, "utf-8");
       await reindexNoteAfterWrite(
         context,
         vaultPath,
@@ -34050,7 +34150,7 @@ var obsidianTools = [
       const relativePath = String(args.file_path);
       const filePath = getSafeFilePath(vaultPath, relativePath);
       const content = String(args.content || "");
-      await fs3.appendFile(filePath, "\n" + content, "utf-8");
+      await fs4.appendFile(filePath, "\n" + content, "utf-8");
       await reindexNoteAfterWrite(
         context,
         vaultPath,
@@ -34095,7 +34195,10 @@ var obsidianTools = [
     async handler(args, context) {
       const vaultPath = context.getVaultPath(args.vault_path);
       const query = String(args.query).toLowerCase();
-      const files = await Ze("**/*.md", { cwd: vaultPath, follow: true });
+      const files = filterSafeVaultFiles(
+        vaultPath,
+        await Ze("**/*.md", { cwd: vaultPath, follow: true })
+      );
       const matches = [];
       for (const file2 of files) {
         if (file2.toLowerCase().includes(query)) {
@@ -34103,7 +34206,7 @@ var obsidianTools = [
           continue;
         }
         try {
-          const content = await fs3.readFile(path3.join(vaultPath, file2), "utf-8");
+          const content = await fs4.readFile(getSafeFilePath(vaultPath, file2), "utf-8");
           if (content.toLowerCase().includes(query)) matches.push(file2);
         } catch {
         }
@@ -34235,7 +34338,10 @@ Content: ${result.text}
         `\\[\\[${target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([\\]\\|#])`,
         "i"
       );
-      const files = await Ze("**/*.md", { cwd: vaultPath, follow: true });
+      const files = filterSafeVaultFiles(
+        vaultPath,
+        await Ze("**/*.md", { cwd: vaultPath, follow: true })
+      );
       const backlinks = [];
       const batchSize = 50;
       for (let i = 0; i < files.length; i += batchSize) {
@@ -34243,8 +34349,8 @@ Content: ${result.text}
         await Promise.all(
           batch.map(async (file2) => {
             try {
-              const content = await fs3.readFile(
-                path3.join(vaultPath, file2),
+              const content = await fs4.readFile(
+                getSafeFilePath(vaultPath, file2),
                 "utf-8"
               );
               if (linkRegex.test(content)) {
@@ -34282,7 +34388,7 @@ Content: ${result.text}
     async handler(args, context) {
       const vaultPath = context.getVaultPath(args.vault_path);
       const filePath = getSafeFilePath(vaultPath, String(args.file_path));
-      const content = await fs3.readFile(filePath, "utf-8");
+      const content = await fs4.readFile(filePath, "utf-8");
       return JSON.stringify(extractWikilinks(content), null, 2);
     }
   },
@@ -34330,7 +34436,7 @@ Content: ${result.text}
       const overwrite = booleanArg(args.overwrite);
       if (!overwrite) {
         try {
-          await fs3.stat(dest);
+          await fs4.stat(dest);
           throw new Error(
             `Destination note already exists: ${destRelativePath}. Set overwrite=true to replace it.`
           );
@@ -34338,8 +34444,8 @@ Content: ${result.text}
           if (error2?.code !== "ENOENT") throw error2;
         }
       }
-      await fs3.mkdir(path3.dirname(dest), { recursive: true });
-      await fs3.rename(source, dest);
+      await fs4.mkdir(path3.dirname(dest), { recursive: true });
+      await fs4.rename(source, dest);
       await reindexMovedNote(
         context,
         vaultPath,
@@ -34394,7 +34500,7 @@ Content: ${result.text}
       const vaultId = context.getVaultId(args.vault_id);
       const relativePath = String(args.file_path);
       const filePath = getSafeFilePath(vaultPath, relativePath);
-      const fileContent = await fs3.readFile(filePath, "utf-8");
+      const fileContent = await fs4.readFile(filePath, "utf-8");
       let updateArg;
       if (args.updates) {
         const updates = typeof args.updates === "string" ? JSON.parse(args.updates) : args.updates;
@@ -34405,7 +34511,7 @@ Content: ${result.text}
           value: String(args.value)
         };
       }
-      await fs3.writeFile(
+      await fs4.writeFile(
         filePath,
         applyFrontmatterUpdate(fileContent, updateArg),
         "utf-8"
@@ -34461,12 +34567,12 @@ Content: ${result.text}
       const filePath = getSafeFilePath(vaultPath, relativePath);
       const heading = String(args.heading);
       const content = String(args.content);
-      const fileContent = await fs3.readFile(filePath, "utf-8");
+      const fileContent = await fs4.readFile(filePath, "utf-8");
       const range = findSectionRange(fileContent, heading);
       if (!range) {
         throw new Error(`Heading "${heading}" not found in ${args.file_path}`);
       }
-      await fs3.writeFile(
+      await fs4.writeFile(
         filePath,
         replaceSection(fileContent, range, content),
         "utf-8"
@@ -34525,9 +34631,9 @@ Content: ${result.text}
       const heading = String(args.heading);
       const content = String(args.content);
       const position = args.position || "end";
-      const fileContent = await fs3.readFile(filePath, "utf-8");
+      const fileContent = await fs4.readFile(filePath, "utf-8");
       const range = findSectionRange(fileContent, heading);
-      await fs3.writeFile(
+      await fs4.writeFile(
         filePath,
         insertAtHeading(fileContent, heading, content, position, range),
         "utf-8"
@@ -34581,13 +34687,13 @@ Content: ${result.text}
       const vaultId = context.getVaultId(args.vault_id);
       const relativePath = String(args.file_path);
       const filePath = getSafeFilePath(vaultPath, relativePath);
-      const fileContent = await fs3.readFile(filePath, "utf-8");
+      const fileContent = await fs4.readFile(filePath, "utf-8");
       const updated = replaceInNote(
         fileContent,
         String(args.old_text),
         String(args.new_text ?? "")
       );
-      await fs3.writeFile(filePath, updated, "utf-8");
+      await fs4.writeFile(filePath, updated, "utf-8");
       await reindexNoteAfterWrite(
         context,
         vaultPath,
@@ -34617,14 +34723,20 @@ Content: ${result.text}
     async handler(args, context) {
       const vaultPath = context.getVaultPath(args.vault_path);
       const pattern = listNotesPattern(optionalString(args.subfolder));
-      const files = await Ze(pattern, { cwd: vaultPath, follow: true });
-      const allFiles = await Ze("**/*.md", { cwd: vaultPath, follow: true });
+      const files = filterSafeVaultFiles(
+        vaultPath,
+        await Ze(pattern, { cwd: vaultPath, follow: true })
+      );
+      const allFiles = filterSafeVaultFiles(
+        vaultPath,
+        await Ze("**/*.md", { cwd: vaultPath, follow: true })
+      );
       const nameSet = new Set(
         allFiles.map((file2) => path3.basename(file2, ".md").toLowerCase())
       );
       const targetMap = /* @__PURE__ */ new Map();
       for (const file2 of files) {
-        const content = await fs3.readFile(path3.join(vaultPath, file2), "utf-8").catch(() => "");
+        const content = await fs4.readFile(getSafeFilePath(vaultPath, file2), "utf-8").catch(() => "");
         for (const link of extractWikilinks(content)) {
           const target = stripHeadingFromLink(link);
           if (!target) continue;
@@ -34789,44 +34901,6 @@ function assertNativeDependencies() {
     process.exit(1);
   }
 }
-function getFirstEnv(...keys) {
-  for (const key of keys) {
-    const value = process.env[key];
-    if (typeof value === "string" && value.length > 0) {
-      return value;
-    }
-  }
-  return null;
-}
-function parseAllowedVaultRoots() {
-  const raw = getFirstEnv(
-    "OBSIDIAN_ALLOWED_VAULTS",
-    "CODEX_OBSIDIAN_ALLOWED_VAULTS",
-    "GEMINI_OBSIDIAN_ALLOWED_VAULTS"
-  );
-  if (!raw) return null;
-  return raw.split(path5.delimiter).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-}
-function resolveRealPathAllowMissing(candidatePath) {
-  if (!path5.isAbsolute(candidatePath)) {
-    throw new Error(`Path must be absolute: ${candidatePath}`);
-  }
-  const resolvedPath = path5.resolve(candidatePath);
-  let existingPath = resolvedPath;
-  const missingParts = [];
-  while (!nodeFs.existsSync(existingPath)) {
-    const parent = path5.dirname(existingPath);
-    if (parent === existingPath) break;
-    missingParts.unshift(path5.basename(existingPath));
-    existingPath = parent;
-  }
-  const realExistingPath = nodeFs.realpathSync.native(existingPath);
-  return missingParts.length > 0 ? path5.join(realExistingPath, ...missingParts) : realExistingPath;
-}
-function isPathContainedByRoot(candidatePath, rootPath) {
-  const relativePath = path5.relative(rootPath, candidatePath);
-  return relativePath === "" || !relativePath.startsWith("..") && !path5.isAbsolute(relativePath);
-}
 function boundaryViolation(pathKind, candidatePath) {
   return new Error(
     `Security Error: ${pathKind} is outside the allowed vault boundary: ${candidatePath}. Set OBSIDIAN_ALLOWED_VAULTS to permit additional roots.`
@@ -34834,7 +34908,9 @@ function boundaryViolation(pathKind, candidatePath) {
 }
 function assertPathAllowed(candidatePath, allowedRoots, pathKind) {
   const realCandidatePath = resolveRealPathAllowMissing(candidatePath);
-  const realAllowedRoots = allowedRoots.map(resolveRealPathAllowMissing);
+  const realAllowedRoots = allowedRoots.map(
+    (rootPath) => resolveRealPathAllowMissing(rootPath)
+  );
   if (!realAllowedRoots.some(
     (rootPath) => isPathContainedByRoot(realCandidatePath, rootPath)
   )) {
@@ -34857,7 +34933,7 @@ async function saveConfig(options2) {
     });
     await Promise.all(
       CONFIG_PATHS.map(
-        (configPath) => fs5.writeFile(configPath, serialized, "utf-8")
+        (configPath) => fs6.writeFile(configPath, serialized, "utf-8")
       )
     );
   } catch (error2) {
@@ -34867,7 +34943,7 @@ async function saveConfig(options2) {
 async function loadConfig() {
   for (const configPath of [...CONFIG_PATHS, ...LEGACY_CONFIG_PATHS]) {
     try {
-      const data = await fs5.readFile(configPath, "utf-8");
+      const data = await fs6.readFile(configPath, "utf-8");
       const config2 = JSON.parse(data);
       return {
         vault_path: config2.vault_path || null,
@@ -34887,7 +34963,7 @@ async function loadConfig() {
 async function loadPackageMetadata() {
   const packageJsonPath = path5.join(__dirname, "..", "package.json");
   try {
-    const data = await fs5.readFile(packageJsonPath, "utf-8");
+    const data = await fs6.readFile(packageJsonPath, "utf-8");
     const packageJson = JSON.parse(data);
     return {
       name: String(packageJson.name || PROJECT_NAME),
@@ -34955,21 +35031,21 @@ function createToolContext(indexer, initialConfig, contextOptions = {}) {
   };
 }
 async function readStdin() {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve3, reject) => {
     let data = "";
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => {
       data += chunk;
     });
     process.stdin.on("end", () => {
-      resolve4(data);
+      resolve3(data);
     });
     process.stdin.on("error", (error2) => {
       reject(error2);
     });
     setTimeout(() => {
       if (data === "") {
-        resolve4("");
+        resolve3("");
       }
     }, 1e3);
   });

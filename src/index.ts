@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 
-import * as nodeFs from "fs";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
 import { getDailyNoteConfig } from "./daily-note.js";
+import {
+    getFirstEnv,
+    isPathContainedByRoot,
+    parseAllowedVaultRoots,
+    resolveRealPathAllowMissing,
+} from "./utils.js";
 import {
     dispatchCliTool,
     dispatchMcpTool,
@@ -45,59 +50,6 @@ function assertNativeDependencies() {
     }
 }
 
-function getFirstEnv(...keys: string[]): string | null {
-    for (const key of keys) {
-        const value = process.env[key];
-        if (typeof value === "string" && value.length > 0) {
-            return value;
-        }
-    }
-    return null;
-}
-
-function parseAllowedVaultRoots(): string[] | null {
-    const raw = getFirstEnv(
-        "OBSIDIAN_ALLOWED_VAULTS",
-        "CODEX_OBSIDIAN_ALLOWED_VAULTS",
-        "GEMINI_OBSIDIAN_ALLOWED_VAULTS",
-    );
-    if (!raw) return null;
-    return raw
-        .split(path.delimiter)
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0);
-}
-
-function resolveRealPathAllowMissing(candidatePath: string): string {
-    if (!path.isAbsolute(candidatePath)) {
-        throw new Error(`Path must be absolute: ${candidatePath}`);
-    }
-
-    const resolvedPath = path.resolve(candidatePath);
-    let existingPath = resolvedPath;
-    const missingParts: string[] = [];
-
-    while (!nodeFs.existsSync(existingPath)) {
-        const parent = path.dirname(existingPath);
-        if (parent === existingPath) break;
-        missingParts.unshift(path.basename(existingPath));
-        existingPath = parent;
-    }
-
-    const realExistingPath = nodeFs.realpathSync.native(existingPath);
-    return missingParts.length > 0
-        ? path.join(realExistingPath, ...missingParts)
-        : realExistingPath;
-}
-
-function isPathContainedByRoot(candidatePath: string, rootPath: string): boolean {
-    const relativePath = path.relative(rootPath, candidatePath);
-    return (
-        relativePath === "" ||
-        (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
-    );
-}
-
 function boundaryViolation(
     pathKind: "vault_path" | "workspace_path",
     candidatePath: string,
@@ -114,7 +66,9 @@ function assertPathAllowed(
     pathKind: "vault_path" | "workspace_path",
 ) {
     const realCandidatePath = resolveRealPathAllowMissing(candidatePath);
-    const realAllowedRoots = allowedRoots.map(resolveRealPathAllowMissing);
+    const realAllowedRoots = allowedRoots.map((rootPath) =>
+        resolveRealPathAllowMissing(rootPath),
+    );
     if (
         !realAllowedRoots.some((rootPath) =>
             isPathContainedByRoot(realCandidatePath, rootPath),

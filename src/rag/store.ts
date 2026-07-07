@@ -326,8 +326,19 @@ export class VaultIndexer {
       const embedder = Embedder.getInstance();
       const db = await this.getDb(vaultPath, workspacePath, vaultId);
 
-      // Find all markdown files (incorporating follow: true from upstream)
-      const files = await glob('**/*.md', { cwd: vaultPath, absolute: true, follow: true });
+      // Follow symlinked vault folders, but only keep files whose real path
+      // stays inside the vault boundary or an explicit OBSIDIAN_ALLOWED_VAULTS root.
+      const discoveredFiles = await glob('**/*.md', { cwd: vaultPath, absolute: true, follow: true });
+      const files = discoveredFiles.filter((filePath) => {
+        const relativePath = path.relative(vaultPath, filePath).replace(/\\/g, '/');
+        try {
+          getSafeFilePath(vaultPath, relativePath);
+          return true;
+        } catch (error: any) {
+          console.error(`Skipping out-of-bounds indexed file ${relativePath}: ${error?.message ?? String(error)}`);
+          return false;
+        }
+      });
       console.error(`Found ${files.length} notes in ${vaultPath}`);
 
       // Load previous file hashes for incremental indexing

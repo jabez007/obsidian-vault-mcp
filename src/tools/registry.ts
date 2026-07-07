@@ -69,6 +69,18 @@ function optionalString(value: unknown): string | undefined {
     return value === undefined || value === null ? undefined : String(value);
 }
 
+function filterSafeVaultFiles(vaultPath: string, files: string[]): string[] {
+    return files.filter((file) => {
+        try {
+            getSafeFilePath(vaultPath, file);
+            return true;
+        } catch (error: any) {
+            console.error(`Skipping out-of-bounds vault file ${file}: ${error?.message ?? String(error)}`);
+            return false;
+        }
+    });
+}
+
 export const obsidianTools: ObsidianTool[] = [
     {
         name: "obsidian_set_vault",
@@ -143,7 +155,10 @@ export const obsidianTools: ObsidianTool[] = [
         async handler(args, context) {
             const vaultPath = context.getVaultPath(args.vault_path);
             const pattern = listNotesPattern(optionalString(args.subfolder));
-            const files = await glob(pattern, { cwd: vaultPath, follow: true });
+            const files = filterSafeVaultFiles(
+                vaultPath,
+                await glob(pattern, { cwd: vaultPath, follow: true }),
+            );
             return (
                 JSON.stringify(files.slice(0, 100), null, 2) +
                 (files.length > 100 ? `\n...and ${files.length - 100} more.` : "")
@@ -301,7 +316,10 @@ export const obsidianTools: ObsidianTool[] = [
         async handler(args, context) {
             const vaultPath = context.getVaultPath(args.vault_path);
             const query = String(args.query).toLowerCase();
-            const files = await glob("**/*.md", { cwd: vaultPath, follow: true });
+            const files = filterSafeVaultFiles(
+                vaultPath,
+                await glob("**/*.md", { cwd: vaultPath, follow: true }),
+            );
             const matches: string[] = [];
             for (const file of files) {
                 if (file.toLowerCase().includes(query)) {
@@ -309,7 +327,7 @@ export const obsidianTools: ObsidianTool[] = [
                     continue;
                 }
                 try {
-                    const content = await fs.readFile(path.join(vaultPath, file), "utf-8");
+                    const content = await fs.readFile(getSafeFilePath(vaultPath, file), "utf-8");
                     if (content.toLowerCase().includes(query)) matches.push(file);
                 } catch {
                     /* ignore unreadable files */
@@ -447,7 +465,10 @@ export const obsidianTools: ObsidianTool[] = [
                 `\\[\\[${target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([\\]\\|#])`,
                 "i",
             );
-            const files = await glob("**/*.md", { cwd: vaultPath, follow: true });
+            const files = filterSafeVaultFiles(
+                vaultPath,
+                await glob("**/*.md", { cwd: vaultPath, follow: true }),
+            );
             const backlinks: string[] = [];
             const batchSize = 50;
 
@@ -457,7 +478,7 @@ export const obsidianTools: ObsidianTool[] = [
                     batch.map(async (file) => {
                         try {
                             const content = await fs.readFile(
-                                path.join(vaultPath, file),
+                                getSafeFilePath(vaultPath, file),
                                 "utf-8",
                             );
                             if (linkRegex.test(content)) {
@@ -850,15 +871,21 @@ export const obsidianTools: ObsidianTool[] = [
         async handler(args, context) {
             const vaultPath = context.getVaultPath(args.vault_path);
             const pattern = listNotesPattern(optionalString(args.subfolder));
-            const files = await glob(pattern, { cwd: vaultPath, follow: true });
-            const allFiles = await glob("**/*.md", { cwd: vaultPath, follow: true });
+            const files = filterSafeVaultFiles(
+                vaultPath,
+                await glob(pattern, { cwd: vaultPath, follow: true }),
+            );
+            const allFiles = filterSafeVaultFiles(
+                vaultPath,
+                await glob("**/*.md", { cwd: vaultPath, follow: true }),
+            );
             const nameSet = new Set(
                 allFiles.map((file) => path.basename(file, ".md").toLowerCase()),
             );
             const targetMap = new Map<string, string[]>();
             for (const file of files) {
                 const content = await fs
-                    .readFile(path.join(vaultPath, file), "utf-8")
+                    .readFile(getSafeFilePath(vaultPath, file), "utf-8")
                     .catch(() => "");
                 for (const link of extractWikilinks(content)) {
                     const target = stripHeadingFromLink(link);

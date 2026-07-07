@@ -19,6 +19,14 @@ vi.mock('../src/rag/embedder', () => ({
 
 // Global mock for os.homedir to allow control in tests
 let mockHomedir: string | null = null;
+const allowedVaultEnvKeys = [
+  'OBSIDIAN_ALLOWED_VAULTS',
+  'CODEX_OBSIDIAN_ALLOWED_VAULTS',
+  'GEMINI_OBSIDIAN_ALLOWED_VAULTS',
+] as const;
+const originalAllowedVaultEnv = Object.fromEntries(
+  allowedVaultEnvKeys.map((key) => [key, process.env[key]]),
+);
 vi.mock('os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('os')>();
   return {
@@ -51,6 +59,14 @@ describe('VaultIndexer path resolution and storage', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
     mockHomedir = null;
+    for (const key of allowedVaultEnvKeys) {
+      const originalValue = originalAllowedVaultEnv[key];
+      if (originalValue === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = originalValue;
+      }
+    }
   });
 
   it('uses workspace_path when provided', async () => {
@@ -273,6 +289,51 @@ describe('VaultIndexer path resolution and storage', () => {
         verifyDb.close();
       }
     }
+  });
+
+  it('does not index markdown reached through an in-vault symlink pointing outside the vault', async () => {
+    const outsideDir = path.join(tempDir, 'outside-index-target');
+    await fs.mkdir(outsideDir);
+    await fs.writeFile(
+      path.join(vaultPath, 'inside.md'),
+      'This inside note is long enough to be indexed and should be the only indexed vault content.',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(outsideDir, 'outside.md'),
+      'This outside note is long enough to be indexed only when explicitly allowlisted.',
+      'utf-8',
+    );
+    await fs.symlink(outsideDir, path.join(vaultPath, 'linked-outside'), 'dir');
+
+    const result = await indexer.indexVault(vaultPath, true, workspacePath);
+
+    expect(result.success).toBe(true);
+    expect(result.chunks).toBe(1);
+    const searchResults = await indexer.search('outside', vaultPath, 10, workspacePath);
+    expect(searchResults.map((row: any) => row.path)).not.toContain('linked-outside/outside.md');
+  });
+
+  it('indexes symlinked markdown when the real target is in OBSIDIAN_ALLOWED_VAULTS', async () => {
+    const outsideDir = path.join(tempDir, 'allowed-index-target');
+    await fs.mkdir(outsideDir);
+    process.env.OBSIDIAN_ALLOWED_VAULTS = [vaultPath, outsideDir].join(path.delimiter);
+    await fs.writeFile(
+      path.join(vaultPath, 'inside.md'),
+      'This inside note is long enough to be indexed alongside an allowlisted linked folder.',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(outsideDir, 'outside.md'),
+      'This outside note is long enough to be indexed because its real folder is allowlisted.',
+      'utf-8',
+    );
+    await fs.symlink(outsideDir, path.join(vaultPath, 'linked-outside'), 'dir');
+
+    const result = await indexer.indexVault(vaultPath, true, workspacePath);
+
+    expect(result.success).toBe(true);
+    expect(result.chunks).toBe(2);
   });
 
   it('creates an FTS index on the text column during indexing', async () => {

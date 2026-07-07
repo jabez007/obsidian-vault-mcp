@@ -1,5 +1,88 @@
 import * as path from 'path';
+import * as fs from 'fs';
 import matter from 'gray-matter';
+
+export function getFirstEnv(...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = process.env[key];
+    if (typeof value === 'string' && value.length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+export function parseAllowedVaultRoots(): string[] | null {
+  const raw = getFirstEnv(
+    'OBSIDIAN_ALLOWED_VAULTS',
+    'CODEX_OBSIDIAN_ALLOWED_VAULTS',
+    'GEMINI_OBSIDIAN_ALLOWED_VAULTS',
+  );
+  if (!raw) return null;
+  return raw
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function entryExists(candidatePath: string): boolean {
+  try {
+    fs.lstatSync(candidatePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const MAX_SYMLINK_DEPTH = 40;
+
+export function resolveRealPathAllowMissing(candidatePath: string, symlinkDepth: number = 0): string {
+  if (!path.isAbsolute(candidatePath)) {
+    throw new Error(`Path must be absolute: ${candidatePath}`);
+  }
+  if (symlinkDepth > MAX_SYMLINK_DEPTH) {
+    throw new Error(`Too many symbolic links: ${candidatePath}`);
+  }
+
+  const resolvedPath = path.resolve(candidatePath);
+  let existingPath = resolvedPath;
+  const missingParts: string[] = [];
+
+  // Walk up with lstat so a dangling symlink counts as existing; treating it
+  // as missing would let a link pointing outside the boundary masquerade as
+  // an in-boundary file that a later write then creates at the link target.
+  while (!entryExists(existingPath)) {
+    const parent = path.dirname(existingPath);
+    if (parent === existingPath) break;
+    missingParts.unshift(path.basename(existingPath));
+    existingPath = parent;
+  }
+
+  let realExistingPath: string;
+  try {
+    realExistingPath = fs.realpathSync.native(existingPath);
+  } catch {
+    // realpath fails when the deepest existing entry is a dangling symlink:
+    // resolve the link target manually and keep resolving from there.
+    const linkTarget = fs.readlinkSync(existingPath);
+    realExistingPath = resolveRealPathAllowMissing(
+      path.resolve(path.dirname(existingPath), linkTarget),
+      symlinkDepth + 1,
+    );
+  }
+
+  return missingParts.length > 0
+    ? path.join(realExistingPath, ...missingParts)
+    : realExistingPath;
+}
+
+export function isPathContainedByRoot(candidatePath: string, rootPath: string): boolean {
+  const relativePath = path.relative(rootPath, candidatePath);
+  return (
+    relativePath === '' ||
+    (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))
+  );
+}
 
 /**
  * Resolve a user-supplied relative path against a vault root, ensuring
@@ -9,6 +92,12 @@ export function getSafeFilePath(vaultPath: string, userInputPath: string): strin
   const resolvedVault = path.resolve(vaultPath);
   const resolvedTarget = path.resolve(resolvedVault, userInputPath);
   if (!resolvedTarget.startsWith(resolvedVault + path.sep) && resolvedTarget !== resolvedVault) {
+    throw new Error("Security Error: Path traversal detected.");
+  }
+  const realVault = resolveRealPathAllowMissing(resolvedVault);
+  const realTarget = resolveRealPathAllowMissing(resolvedTarget);
+  const allowedRoots = [realVault, ...(parseAllowedVaultRoots() ?? []).map((root) => resolveRealPathAllowMissing(root))];
+  if (!allowedRoots.some((root) => isPathContainedByRoot(realTarget, root))) {
     throw new Error("Security Error: Path traversal detected.");
   }
   return resolvedTarget;

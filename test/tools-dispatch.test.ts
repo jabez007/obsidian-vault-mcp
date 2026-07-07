@@ -242,6 +242,67 @@ describe('tool registry dispatch', () => {
     )).rejects.toThrow(/vault_path is outside the allowed vault boundary/);
   });
 
+  it('rejects obsidian_read_note through an in-vault symlink pointing outside the vault', async () => {
+    const { context, vaultPath } = await createFakeContext();
+    const outsideDir = await makeTempDir('outside-note-target-');
+    await fs.writeFile(
+      path.join(outsideDir, 'secret.md'),
+      'outside content should not be readable through the vault',
+      'utf-8',
+    );
+    await fs.symlink(path.join(outsideDir, 'secret.md'), path.join(vaultPath, 'linked-secret.md'));
+
+    await expect(dispatchMcpTool(
+      'obsidian_read_note',
+      { file_path: 'linked-secret.md' },
+      context,
+    )).rejects.toThrow(/Path traversal detected/);
+  });
+
+  it('rejects obsidian_create_note through an in-vault symlinked folder pointing outside the vault', async () => {
+    const { context, vaultPath } = await createFakeContext();
+    const outsideDir = await makeTempDir('outside-create-target-');
+    await fs.symlink(outsideDir, path.join(vaultPath, 'linked-folder'), 'dir');
+
+    await expect(dispatchMcpTool(
+      'obsidian_create_note',
+      { file_path: 'linked-folder/new-note.md', content: 'outside write should be blocked' },
+      context,
+    )).rejects.toThrow(/Path traversal detected/);
+    await expect(fs.stat(path.join(outsideDir, 'new-note.md'))).rejects.toThrow();
+  });
+
+  it('rejects obsidian_create_note through a dangling in-vault symlink pointing outside the vault', async () => {
+    const { context, vaultPath } = await createFakeContext();
+    const outsideDir = await makeTempDir('outside-dangling-target-');
+    const outsideTarget = path.join(outsideDir, 'not-yet-created.md');
+    await fs.symlink(outsideTarget, path.join(vaultPath, 'dangling.md'));
+
+    await expect(dispatchMcpTool(
+      'obsidian_create_note',
+      { file_path: 'dangling.md', content: 'write through dangling symlink should be blocked' },
+      context,
+    )).rejects.toThrow(/Path traversal detected/);
+    await expect(fs.stat(outsideTarget)).rejects.toThrow();
+  });
+
+  it('allows symlinked vault folders when their real target is in OBSIDIAN_ALLOWED_VAULTS', async () => {
+    const { context, vaultPath, indexer } = await createFakeContext();
+    const outsideDir = await makeTempDir('allowed-symlink-target-');
+    process.env.OBSIDIAN_ALLOWED_VAULTS = [vaultPath, outsideDir].join(path.delimiter);
+    await fs.symlink(outsideDir, path.join(vaultPath, 'linked-folder'), 'dir');
+
+    const result = await dispatchMcpTool(
+      'obsidian_create_note',
+      { file_path: 'linked-folder/new-note.md', content: 'allowed linked folder write' },
+      context,
+    );
+
+    expect(result.content[0].text).toBe('Created note: linked-folder/new-note.md');
+    await expect(fs.readFile(path.join(outsideDir, 'new-note.md'), 'utf-8')).resolves.toBe('allowed linked folder write');
+    expect(indexer.indexFile).toHaveBeenCalledWith(vaultPath, 'linked-folder/new-note.md', null, null);
+  });
+
   it('bootstraps obsidian_set_vault when no vault is configured, then keeps overrides in that vault', async () => {
     const vaultPath = await makeTempDir('bootstrap-vault-');
     const otherVaultPath = await makeTempDir('other-vault-');

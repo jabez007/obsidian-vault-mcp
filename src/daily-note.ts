@@ -8,7 +8,19 @@ const DEFAULT_DAILY_NOTE_FORMAT = "YYYY-MM-DD";
 export async function getDailyNoteConfig(
     vaultPath: string,
 ): Promise<{ folder: string; format: string }> {
-    const configPath = path.join(vaultPath, ".obsidian", "daily-notes.json");
+    let configPath: string;
+    try {
+        configPath = getSafeFilePath(vaultPath, path.join(".obsidian", "daily-notes.json"));
+    } catch {
+        // A .obsidian folder symlinked outside the vault boundary (a common
+        // way to share settings between vaults) is a config lookup, not a
+        // note access: fall back to defaults instead of failing the tool.
+        console.error(
+            "Daily-notes config resolves outside the vault boundary; using defaults. " +
+            "Add the real .obsidian location to OBSIDIAN_ALLOWED_VAULTS to use it.",
+        );
+        return { folder: "", format: DEFAULT_DAILY_NOTE_FORMAT };
+    }
     try {
         const data = await fs.readFile(configPath, "utf-8");
         const config = JSON.parse(data);
