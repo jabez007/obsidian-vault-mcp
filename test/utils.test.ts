@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as path from 'path';
 import matter from 'gray-matter';
 import {
@@ -200,6 +200,28 @@ describe('getSafeFilePath', () => {
     const inside = path.join(vault, 'notes', 'file.md');
     const result = getSafeFilePath(vault, inside);
     expect(result).toBe(inside);
+  });
+
+  it('ignores malformed OBSIDIAN_ALLOWED_VAULTS entries while checking the vault root', () => {
+    const originalAllowedVaults = process.env.OBSIDIAN_ALLOWED_VAULTS;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env.OBSIDIAN_ALLOWED_VAULTS = ['relative-vault', vault].join(path.delimiter);
+
+    try {
+      const result = getSafeFilePath(vault, 'notes/hello.md');
+
+      expect(result).toBe(path.resolve(vault, 'notes/hello.md'));
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Ignoring non-absolute OBSIDIAN_ALLOWED_VAULTS entry: relative-vault',
+      );
+    } finally {
+      warnSpy.mockRestore();
+      if (originalAllowedVaults === undefined) {
+        delete process.env.OBSIDIAN_ALLOWED_VAULTS;
+      } else {
+        process.env.OBSIDIAN_ALLOWED_VAULTS = originalAllowedVaults;
+      }
+    }
   });
 });
 

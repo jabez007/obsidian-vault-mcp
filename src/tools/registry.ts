@@ -355,15 +355,16 @@ export const obsidianTools: ObsidianTool[] = [
             );
             const matches: string[] = [];
             for (const file of files) {
+                if (matches.length >= 20) break;
                 if (file.toLowerCase().includes(query)) {
                     matches.push(file + " (Filename match)");
-                    continue;
-                }
-                try {
-                    const content = await fs.readFile(getSafeFilePath(vaultPath, file), "utf-8");
-                    if (content.toLowerCase().includes(query)) matches.push(file);
-                } catch {
-                    /* ignore unreadable files */
+                } else {
+                    try {
+                        const content = await fs.readFile(getSafeFilePath(vaultPath, file), "utf-8");
+                        if (content.toLowerCase().includes(query)) matches.push(file);
+                    } catch {
+                        /* ignore unreadable files */
+                    }
                 }
                 if (matches.length >= 20) break;
             }

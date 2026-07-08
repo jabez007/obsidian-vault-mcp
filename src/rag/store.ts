@@ -630,6 +630,13 @@ export class VaultIndexer {
     if (chunks.length === 0) {
       return { success: false, contentHash, message: `Failed to embed content for ${relativePath}.` };
     }
+    if (chunks.length < textsToEmbed.length) {
+      return {
+        success: false,
+        chunks: chunks.length,
+        message: `Failed to embed all content for ${relativePath}: ${chunks.length}/${textsToEmbed.length} chunks embedded.`,
+      };
+    }
 
     await this.deleteRowsForPaths(table, deleteTargets);
     await this.addNoteChunks(table, chunks);

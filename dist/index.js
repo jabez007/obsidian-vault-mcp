@@ -7599,7 +7599,18 @@ function getSafeFilePath(vaultPath, userInputPath) {
   }
   const realVault = resolveRealPathAllowMissing(resolvedVault);
   const realTarget = resolveRealPathAllowMissing(resolvedTarget);
-  const allowedRoots = [realVault, ...(parseAllowedVaultRoots() ?? []).map((root) => resolveRealPathAllowMissing(root))];
+  const allowedRoots = [realVault];
+  for (const root of parseAllowedVaultRoots() ?? []) {
+    if (!path.isAbsolute(root)) {
+      console.warn(`Ignoring non-absolute OBSIDIAN_ALLOWED_VAULTS entry: ${root}`);
+      continue;
+    }
+    try {
+      allowedRoots.push(resolveRealPathAllowMissing(root));
+    } catch (error2) {
+      console.warn(`Ignoring invalid OBSIDIAN_ALLOWED_VAULTS entry: ${root}`, error2);
+    }
+  }
   if (!allowedRoots.some((root) => isPathContainedByRoot(realTarget, root))) {
     throw new Error("Security Error: Path traversal detected.");
   }
@@ -33896,6 +33907,13 @@ var init_store = __esm({
         if (chunks.length === 0) {
           return { success: false, contentHash, message: `Failed to embed content for ${relativePath}.` };
         }
+        if (chunks.length < textsToEmbed.length) {
+          return {
+            success: false,
+            chunks: chunks.length,
+            message: `Failed to embed all content for ${relativePath}: ${chunks.length}/${textsToEmbed.length} chunks embedded.`
+          };
+        }
         await this.deleteRowsForPaths(table, deleteTargets);
         await this.addNoteChunks(table, chunks);
         return { success: true, chunks: chunks.length, contentHash };
@@ -34636,14 +34654,15 @@ var obsidianTools = [
       );
       const matches = [];
       for (const file2 of files) {
+        if (matches.length >= 20) break;
         if (file2.toLowerCase().includes(query)) {
           matches.push(file2 + " (Filename match)");
-          continue;
-        }
-        try {
-          const content = await fs4.readFile(getSafeFilePath(vaultPath, file2), "utf-8");
-          if (content.toLowerCase().includes(query)) matches.push(file2);
-        } catch {
+        } else {
+          try {
+            const content = await fs4.readFile(getSafeFilePath(vaultPath, file2), "utf-8");
+            if (content.toLowerCase().includes(query)) matches.push(file2);
+          } catch {
+          }
         }
         if (matches.length >= 20) break;
       }

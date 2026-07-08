@@ -16,7 +16,7 @@ Please include:
 obsidian-vault-mcp runs entirely locally — no data is sent to external services. The primary security considerations are:
 
 - **File system access** — the extension reads and writes files in your Obsidian vault
-- **Local embedding model** — runs via onnxruntime-node, no network calls
+- **Local embedding model** — runs via `@huggingface/transformers`, no network calls
 - **LanceDB storage** — vector index stored locally on disk
 
 ## Supported Versions

@@ -392,6 +392,56 @@ describe('VaultIndexer path resolution and storage', () => {
     await expect(indexer.checkIndexStaleness(vaultPath, workspacePath)).resolves.toMatchObject({ stale: true });
   });
 
+  it('does not replace rows or record a full hash when single-file indexing partially embeds', async () => {
+    const relativePath = 'partial.md';
+    const notePath = path.join(vaultPath, relativePath);
+    const initialContent = [
+      '# First',
+      '',
+      'This first paragraph is long enough to index successfully and mention amber.',
+      '',
+      '# Second',
+      '',
+      'This second paragraph is long enough to index successfully and mention cobalt.',
+    ].join('\n');
+    await fs.writeFile(notePath, initialContent, 'utf-8');
+    const initialResult = await indexer.indexVault(vaultPath, true, workspacePath);
+    expect(initialResult.success).toBe(true);
+    expect(initialResult.chunks).toBe(2);
+
+    const partialContent = [
+      '# First',
+      '',
+      'This first paragraph changed and is still long enough to embed successfully.',
+      '',
+      '# Second',
+      '',
+      'FAILEMBED this second paragraph is long enough to chunk but fails embedding.',
+    ].join('\n');
+    await fs.writeFile(notePath, partialContent, 'utf-8');
+    const result = await indexer.indexFile(vaultPath, relativePath, workspacePath);
+
+    expect(result.success).toBe(false);
+    expect(result.chunks).toBe(1);
+    expect(result.message).toContain('1/2 chunks embedded');
+
+    const hashPath = path.join(getVaultStorePath(), 'file-hashes.json');
+    const hashes = JSON.parse(await fs.readFile(hashPath, 'utf-8'));
+    expect(hashes[relativePath]).toBe(md5(initialContent));
+
+    const lancedb = await import('@lancedb/lancedb');
+    const dbPath = path.join(getVaultStorePath(), 'lancedb');
+    const db = await lancedb.connect(dbPath);
+    try {
+      const table = await db.openTable('notes');
+      expect(await table.countRows()).toBe(2);
+    } finally {
+      if (typeof db.close === 'function') {
+        db.close();
+      }
+    }
+  });
+
   it('keeps reporting stale after a single-file reindex when other files changed externally', async () => {
     const notePathA = path.join(vaultPath, 'a.md');
     const notePathB = path.join(vaultPath, 'b.md');

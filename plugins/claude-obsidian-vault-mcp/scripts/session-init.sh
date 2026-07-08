@@ -30,12 +30,13 @@ if [ ! -f "$PLUGIN_ROOT/scripts/session-init.sh" ]; then
   exit 1
 fi
 
+declare -a SERVER_COMMAND
 if [ -n "${OBSIDIAN_MCP_SERVER_COMMAND:-}" ]; then
-  SERVER_COMMAND="$OBSIDIAN_MCP_SERVER_COMMAND"
+  SERVER_COMMAND=("$OBSIDIAN_MCP_SERVER_COMMAND")
 elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "$CLAUDE_PLUGIN_ROOT/scripts/claude-mcp-server.sh" ]; then
-  SERVER_COMMAND="bash \"$CLAUDE_PLUGIN_ROOT/scripts/claude-mcp-server.sh\""
+  SERVER_COMMAND=(bash "$CLAUDE_PLUGIN_ROOT/scripts/claude-mcp-server.sh")
 else
-  SERVER_COMMAND="npx -y @jabez007/obsidian-vault-mcp@2"
+  SERVER_COMMAND=(npx -y @jabez007/obsidian-vault-mcp@2)
 fi
 CONFIG_PRIMARY="$HOME/.obsidian-mcp.config.json"
 CONFIG_LEGACY="$HOME/.gemini-obsidian.config.json"
@@ -57,7 +58,7 @@ if [ -n "$VAULT_PATH" ] && [ -d "$VAULT_PATH" ]; then
   note_count=$(find "$VAULT_PATH" -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' ')
   status_line="Obsidian vault connected: $VAULT_PATH ($note_count notes)"
 
-  if index_output=$(eval "$SERVER_COMMAND obsidian_rag_index" 2>/dev/null); then
+  if index_output=$("${SERVER_COMMAND[@]}" obsidian_rag_index 2>/dev/null); then
     if printf '%s' "$index_output" | grep -q '"chunks":0'; then
       index_line="RAG index up to date"
     elif printf '%s' "$index_output" | grep -q '"chunks"'; then

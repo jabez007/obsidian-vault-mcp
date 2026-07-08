@@ -92,6 +92,23 @@ describe('tool registry dispatch', () => {
     });
   });
 
+  it('caps filename search matches at 20 results', async () => {
+    const { context, vaultPath } = await createFakeContext();
+    for (let i = 0; i < 25; i++) {
+      await fs.writeFile(
+        path.join(vaultPath, `needle-${String(i).padStart(2, '0')}.md`),
+        'content that does not matter for filename matches',
+        'utf-8',
+      );
+    }
+
+    const result = await dispatchMcpTool('obsidian_search_notes', { query: 'needle' }, context);
+    const matches = result.content[0].text.split('\n');
+
+    expect(matches).toHaveLength(20);
+    expect(matches.every((match) => match.endsWith('(Filename match)'))).toBe(true);
+  });
+
   it('dispatches MCP calls through the registry and includes RAG relevance', async () => {
     const allowedRoot = await makeTempDir('allowed-vaults-');
     const vaultPath = path.join(allowedRoot, 'vault');

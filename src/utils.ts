@@ -96,7 +96,18 @@ export function getSafeFilePath(vaultPath: string, userInputPath: string): strin
   }
   const realVault = resolveRealPathAllowMissing(resolvedVault);
   const realTarget = resolveRealPathAllowMissing(resolvedTarget);
-  const allowedRoots = [realVault, ...(parseAllowedVaultRoots() ?? []).map((root) => resolveRealPathAllowMissing(root))];
+  const allowedRoots = [realVault];
+  for (const root of parseAllowedVaultRoots() ?? []) {
+    if (!path.isAbsolute(root)) {
+      console.warn(`Ignoring non-absolute OBSIDIAN_ALLOWED_VAULTS entry: ${root}`);
+      continue;
+    }
+    try {
+      allowedRoots.push(resolveRealPathAllowMissing(root));
+    } catch (error) {
+      console.warn(`Ignoring invalid OBSIDIAN_ALLOWED_VAULTS entry: ${root}`, error);
+    }
+  }
   if (!allowedRoots.some((root) => isPathContainedByRoot(realTarget, root))) {
     throw new Error("Security Error: Path traversal detected.");
   }
