@@ -32,7 +32,7 @@ fi
 
 declare -a SERVER_COMMAND
 if [ -n "${OBSIDIAN_MCP_SERVER_COMMAND:-}" ]; then
-  SERVER_COMMAND=("$OBSIDIAN_MCP_SERVER_COMMAND")
+  read -r -a SERVER_COMMAND <<< "$OBSIDIAN_MCP_SERVER_COMMAND"
 elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "$CLAUDE_PLUGIN_ROOT/scripts/claude-mcp-server.sh" ]; then
   SERVER_COMMAND=(bash "$CLAUDE_PLUGIN_ROOT/scripts/claude-mcp-server.sh")
 else

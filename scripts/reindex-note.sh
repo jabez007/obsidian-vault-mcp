@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="$(dirname "$SCRIPT_DIR")"
 declare -a SERVER_COMMAND
 if [ -n "${OBSIDIAN_MCP_SERVER_COMMAND:-}" ]; then
-  SERVER_COMMAND=("$OBSIDIAN_MCP_SERVER_COMMAND")
+  read -r -a SERVER_COMMAND <<< "$OBSIDIAN_MCP_SERVER_COMMAND"
 else
   SERVER_COMMAND=(npx -y @jabez007/obsidian-vault-mcp@2)
 fi
