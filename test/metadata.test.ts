@@ -58,11 +58,16 @@ describe('project metadata', () => {
     const geminiExtension = await readJson('gemini-extension.json');
     const rootMcp = await readJson('.mcp.json');
     const bundledMcp = await readJson('plugins/obsidian-vault-mcp/.mcp.json');
+    const sessionInit = await fs.readFile(path.join(repoRoot, 'scripts/session-init.sh'), 'utf-8');
+    const reindexNote = await fs.readFile(path.join(repoRoot, 'scripts/reindex-note.sh'), 'utf-8');
     const majorVersion = String(packageJson.version).split('.')[0];
+    const packageSpec = `${packageJson.name}@${majorVersion}`;
 
     expectNpxLaunch(geminiExtension, packageJson.name, majorVersion);
     expectNpxLaunch(rootMcp, packageJson.name, majorVersion);
     expectNpxLaunch(bundledMcp, packageJson.name, majorVersion);
+    expect(sessionInit).toContain(packageSpec);
+    expect(reindexNote).toContain(packageSpec);
   });
 
   it('wires local-checkout hosts to the checked-in build output', async () => {

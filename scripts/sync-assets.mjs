@@ -1,10 +1,66 @@
 #!/usr/bin/env node
-import { cp, mkdir, rm, stat } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const mcpServerName = 'obsidian-vault-mcp';
+
+async function readJson(relativePath) {
+  return JSON.parse(await readFile(path.join(repoRoot, relativePath), 'utf-8'));
+}
+
+async function writeJson(relativePath, value) {
+  await writeFile(
+    path.join(repoRoot, relativePath),
+    `${JSON.stringify(value, null, 2)}\n`,
+    'utf-8',
+  );
+}
+
+async function syncProjectVersion() {
+  const packageJson = await readJson('package.json');
+  const majorVersion = String(packageJson.version).split('.')[0];
+  const packageSpec = `${packageJson.name}@${majorVersion}`;
+
+  const geminiExtension = await readJson('gemini-extension.json');
+  geminiExtension.version = packageJson.version;
+  geminiExtension.mcpServers[mcpServerName].args = ['-y', packageSpec];
+  await writeJson('gemini-extension.json', geminiExtension);
+
+  const claudePlugin = await readJson('.claude-plugin/plugin.json');
+  claudePlugin.version = packageJson.version;
+  await writeJson('.claude-plugin/plugin.json', claudePlugin);
+
+  const claudeMarketplace = await readJson('.claude-plugin/marketplace.json');
+  claudeMarketplace.version = packageJson.version;
+  for (const plugin of claudeMarketplace.plugins) {
+    if (plugin.name === mcpServerName) plugin.version = packageJson.version;
+  }
+  await writeJson('.claude-plugin/marketplace.json', claudeMarketplace);
+
+  const codexPlugin = await readJson('.codex-plugin/plugin.json');
+  codexPlugin.version = packageJson.version;
+  await writeJson('.codex-plugin/plugin.json', codexPlugin);
+
+  const rootMcp = await readJson('.mcp.json');
+  rootMcp.mcpServers[mcpServerName].args = ['-y', packageSpec];
+  await writeJson('.mcp.json', rootMcp);
+
+  const escapedPackageName = packageJson.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const packagePinPattern = new RegExp(`${escapedPackageName}@\\d+`, 'g');
+  for (const relativePath of [
+    'scripts/reindex-note.sh',
+    'scripts/session-init.sh',
+  ]) {
+    const filePath = path.join(repoRoot, relativePath);
+    const content = await readFile(filePath, 'utf-8');
+    await writeFile(filePath, content.replace(packagePinPattern, packageSpec), 'utf-8');
+  }
+
+  process.stdout.write(`synced project version ${packageJson.version} (npm major ${majorVersion})\n`);
+}
 
 const generatedAssets = [
   {
@@ -100,6 +156,8 @@ async function syncAsset({ source, target, type }) {
 
   process.stdout.write(`synced ${source} -> ${target}\n`);
 }
+
+await syncProjectVersion();
 
 for (const asset of generatedAssets) {
   await syncAsset(asset);

@@ -45,7 +45,7 @@ function assertNativeDependencies() {
         console.error(
             "Launch the server through npm so dependencies are installed automatically:",
         );
-        console.error("  npx -y @jabez007/obsidian-vault-mcp@2\n");
+        console.error("  npx -y @jabez007/obsidian-vault-mcp\n");
         console.error("For local development, run: npm install && npm run build\n");
         process.exit(1);
     }
