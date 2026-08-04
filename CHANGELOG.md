@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.0.0] - 2026-07-03
+## [2.0.0] - 2026-08-04
 
 ### Breaking Changes
 
@@ -59,7 +59,11 @@ All notable changes to this project will be documented in this file.
 - Migrated the embedding stack from the deprecated `@xenova/transformers` 2.x
   to `@huggingface/transformers` 4.x. This unpins `onnxruntime-node` (1.14.0
   from 2023 → current), drops the direct `sharp` dependency, removes the
-  runtime version-check guard, and clears all `npm audit` findings.
+  runtime version-check guard, and updates the supported inference runtime.
+- Updated transitive dependencies, including `protobufjs` 7.6.5. Four
+  high-severity `npm audit` findings remain in `adm-zip` and `sharp` through
+  `@huggingface/transformers`; no upstream fix is available as of this release.
+  See `SECURITY.md` for exposure details.
 - Existing RAG indexes remain loadable (same model, `Xenova/all-MiniLM-L6-v2`,
   384 dimensions), but vectors produced by the new stack are not numerically
   identical to old ones. A mixed index of old and new chunks degrades ranking

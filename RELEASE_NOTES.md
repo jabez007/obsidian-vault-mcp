@@ -1,3 +1,42 @@
+# Release v2.0.0
+
+## Summary
+
+Version 2.0.0 renames the project to Obsidian Vault MCP, adds first-class support for Claude Code, Codex, OpenCode, Gemini CLI, and generic MCP hosts, and strengthens the local RAG pipeline for reliable multi-host use.
+
+## Highlights
+
+- Published as `@jabez007/obsidian-vault-mcp`, with host manifests pinned to major version 2.
+- Consolidated all 18 MCP tools into one registry shared by MCP and one-shot CLI dispatch.
+- Added graph-aware hybrid retrieval with heading breadcrumbs and exact entity/community filters.
+- Added an explicit LanceDB schema, schema-version migrations, cross-process index locking, and stale-index notices.
+- Added Claude Code marketplace packaging and OpenCode configuration while retaining Codex and Gemini support.
+- Added vault-boundary enforcement that resolves symlinks before allowing per-call path overrides.
+- Protected create and move operations from replacing notes unless `overwrite: true` is explicit.
+- Added automatic synchronization for host metadata, generated plugin assets, package versions, and license declarations.
+
+## Breaking Changes
+
+- The project and MCP server key changed from `gemini-obsidian` to `obsidian-vault-mcp`.
+- New configuration writes use `~/.obsidian-mcp.config.json`; the legacy Gemini-named file remains a read-only fallback.
+- Existing local RAG indexes must be rebuilt for the version 3 schema.
+
+## Upgrade
+
+Reinstall host integrations that reference the old project name, then rebuild the local index:
+
+```sh
+npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index --force_reindex true
+```
+
+The first embedding request may download the local model from Hugging Face if it is not already cached.
+
+## Known Dependency Advisories
+
+Four high-severity transitive advisories remain in `adm-zip` and `sharp` through `@huggingface/transformers`. No compatible upstream fixes are available as of this release. The affected ZIP extraction and image-processing paths are not exposed by the text-only MCP tools; see `SECURITY.md` for details.
+
+---
+
 # Release v1.8.0
 
 ## Summary

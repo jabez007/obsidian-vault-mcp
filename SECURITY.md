@@ -13,11 +13,17 @@ Please include:
 
 ## Scope
 
-obsidian-vault-mcp runs entirely locally — no data is sent to external services. The primary security considerations are:
+Vault content and embeddings are processed locally and are not intentionally sent to external services. The primary security considerations are:
 
 - **File system access** — the extension reads and writes files in your Obsidian vault
-- **Local embedding model** — runs via `@huggingface/transformers`, no network calls
+- **Local embedding model** — inference runs locally via `@huggingface/transformers`; the first model load may download model files from Hugging Face unless they are already cached
 - **LanceDB storage** — vector index stored locally on disk
+
+## Dependency Advisories
+
+As of version 2.0.0, `npm audit` reports four high-severity findings in transitive `adm-zip` and `sharp` dependencies included by `@huggingface/transformers`. No fixed upstream versions are currently available.
+
+The server embeds Markdown text and does not expose ZIP extraction or image-processing tools. `adm-zip` is used by the ONNX runtime installation path, while the vulnerable `sharp` functionality is not used by the text embedding pipeline. This limits the current runtime exposure, but the dependencies will be updated when compatible fixes become available.
 
 ## Supported Versions
 
