@@ -62,7 +62,8 @@ All notable changes to this project will be documented in this file.
   runtime version-check guard, and updates the supported inference runtime.
 - Updated transitive dependencies, including `protobufjs` 7.6.5. Four
   high-severity `npm audit` findings remain in `adm-zip` and `sharp` through
-  `@huggingface/transformers`; no upstream fix is available as of this release.
+  `@huggingface/transformers`. `adm-zip` has no fixed release; `sharp` is fixed
+  in 0.35.0, but Transformers 4.2.0 still resolves the vulnerable 0.34.5 line.
   See `SECURITY.md` for exposure details.
 - Existing RAG indexes remain loadable (same model, `Xenova/all-MiniLM-L6-v2`,
   384 dimensions), but vectors produced by the new stack are not numerically

@@ -33,7 +33,7 @@ The first embedding request may download the local model from Hugging Face if it
 
 ## Known Dependency Advisories
 
-Four high-severity transitive advisories remain in `adm-zip` and `sharp` through `@huggingface/transformers`. No compatible upstream fixes are available as of this release. The affected ZIP extraction and image-processing paths are not exposed by the text-only MCP tools; see `SECURITY.md` for details.
+Four high-severity transitive advisories remain in `adm-zip` and `sharp` through `@huggingface/transformers`. `adm-zip` has no fixed release. The `sharp` issues are fixed in 0.35.0, but Transformers 4.2.0 still constrains installations to the vulnerable 0.34.x line. The affected ZIP extraction and image-processing paths are not exposed by the text-only MCP tools; see `SECURITY.md` for details.
 
 ---
 
