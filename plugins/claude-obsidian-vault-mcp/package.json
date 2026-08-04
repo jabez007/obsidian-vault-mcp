@@ -45,7 +45,7 @@
     "mcp"
   ],
   "author": "jabez007",
-  "license": "MIT",
+  "license": "ISC",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/jabez007/obsidian-vault-mcp.git"

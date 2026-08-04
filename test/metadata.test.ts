@@ -32,6 +32,18 @@ describe('project metadata', () => {
     expect(bundledPlugin.version).toBe(packageJson.version);
   });
 
+  it('uses the inherited ISC license across package and plugin metadata', async () => {
+    const packageJson = await readJson('package.json');
+    const claudePlugin = await readJson('.claude-plugin/plugin.json');
+    const claudeMarketplace = await readJson('.claude-plugin/marketplace.json');
+    const rootPlugin = await readJson('.codex-plugin/plugin.json');
+
+    expect(packageJson.license).toBe('ISC');
+    expect(claudePlugin.license).toBe(packageJson.license);
+    expect(claudeMarketplace.plugins[0].license).toBe(packageJson.license);
+    expect(rootPlugin.license).toBe(packageJson.license);
+  });
+
   it('uses the neutral project name in host manifests', async () => {
     const packageJson = await readJson('package.json');
     const geminiExtension = await readJson('gemini-extension.json');

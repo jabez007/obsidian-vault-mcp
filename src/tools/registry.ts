@@ -223,7 +223,8 @@ export const obsidianTools: ObsidianTool[] = [
     },
     {
         name: "obsidian_create_note",
-        description: "Create a new note with the given content.",
+        description:
+            "Create a new note with the given content. Refuses to replace an existing note unless overwrite is true.",
         inputSchema: {
             type: "object",
             properties: {
@@ -248,6 +249,11 @@ export const obsidianTools: ObsidianTool[] = [
                     type: "string",
                     description: "Optional unique identifier for the vault",
                 },
+                overwrite: {
+                    type: "boolean",
+                    description:
+                        "Overwrite an existing note at the same path (default: false)",
+                },
             },
             required: ["file_path", "content"],
         },
@@ -258,8 +264,21 @@ export const obsidianTools: ObsidianTool[] = [
             const relativePath = String(args.file_path);
             const filePath = getSafeFilePath(vaultPath, relativePath);
             const content = String(args.content || "");
+            const overwrite = booleanArg(args.overwrite);
             await fs.mkdir(path.dirname(filePath), { recursive: true });
-            await fs.writeFile(filePath, content, "utf-8");
+            try {
+                await fs.writeFile(filePath, content, {
+                    encoding: "utf-8",
+                    flag: overwrite ? "w" : "wx",
+                });
+            } catch (error: any) {
+                if (error?.code === "EEXIST") {
+                    throw new Error(
+                        `Note already exists: ${relativePath}. Set overwrite=true to replace it.`,
+                    );
+                }
+                throw error;
+            }
             await reindexNoteAfterWrite(
                 context,
                 vaultPath,

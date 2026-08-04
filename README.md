@@ -256,7 +256,7 @@ The following tools are exposed through the MCP server for either host:
 - `obsidian_get_broken_links`: Find wikilinks that point to missing notes.
 
 ### Management & Journaling
-- `obsidian_create_note`: Create a new markdown note.
+- `obsidian_create_note`: Create a new markdown note; refuses to replace an existing note unless `overwrite` is true.
 - `obsidian_append_note`: Append text to the end of a note.
 - `obsidian_move_note`: Rename or move a note.
 - `obsidian_update_frontmatter`: Safely update YAML frontmatter keys in single-key or batch mode.
@@ -289,4 +289,4 @@ npm test
 
 ## License
 
-MIT
+ISC

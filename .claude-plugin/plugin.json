@@ -10,7 +10,7 @@
   },
   "homepage": "https://github.com/jabez007/obsidian-vault-mcp",
   "repository": "https://github.com/jabez007/obsidian-vault-mcp",
-  "license": "MIT",
+  "license": "ISC",
   "keywords": [
     "claude-code",
     "obsidian",

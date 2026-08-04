@@ -43,6 +43,8 @@ All notable changes to this project will be documented in this file.
   cannot redirect tools to arbitrary filesystem locations.
 - `obsidian_move_note` now refuses to replace an existing destination unless
   callers pass `overwrite: true`.
+- `obsidian_create_note` now refuses to replace an existing note unless
+  callers pass `overwrite: true`.
 
 ### Refactor
 

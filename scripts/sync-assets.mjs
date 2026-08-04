@@ -31,17 +31,22 @@ async function syncProjectVersion() {
 
   const claudePlugin = await readJson('.claude-plugin/plugin.json');
   claudePlugin.version = packageJson.version;
+  claudePlugin.license = packageJson.license;
   await writeJson('.claude-plugin/plugin.json', claudePlugin);
 
   const claudeMarketplace = await readJson('.claude-plugin/marketplace.json');
   claudeMarketplace.version = packageJson.version;
   for (const plugin of claudeMarketplace.plugins) {
-    if (plugin.name === mcpServerName) plugin.version = packageJson.version;
+    if (plugin.name === mcpServerName) {
+      plugin.version = packageJson.version;
+      plugin.license = packageJson.license;
+    }
   }
   await writeJson('.claude-plugin/marketplace.json', claudeMarketplace);
 
   const codexPlugin = await readJson('.codex-plugin/plugin.json');
   codexPlugin.version = packageJson.version;
+  codexPlugin.license = packageJson.license;
   await writeJson('.codex-plugin/plugin.json', codexPlugin);
 
   const rootMcp = await readJson('.mcp.json');

@@ -90,6 +90,10 @@ describe('tool registry dispatch', () => {
       description: 'Optional entity labels to require in matching chunks. Matched exactly (case-sensitive); comma-separated for CLI',
       items: { type: 'string' },
     });
+    expect(response.tools.find((tool) => tool.name === 'obsidian_create_note')?.inputSchema.properties?.overwrite).toEqual({
+      type: 'boolean',
+      description: 'Overwrite an existing note at the same path (default: false)',
+    });
   });
 
   it('caps filename search matches at 20 results', async () => {
@@ -392,6 +396,28 @@ describe('tool registry dispatch', () => {
     expect(result.content[0].text).toBe('Created note: linked-folder/new-note.md');
     await expect(fs.readFile(path.join(outsideDir, 'new-note.md'), 'utf-8')).resolves.toBe('allowed linked folder write');
     expect(indexer.indexFile).toHaveBeenCalledWith(vaultPath, 'linked-folder/new-note.md', null, null);
+  });
+
+  it('requires overwrite=true before obsidian_create_note replaces an existing note', async () => {
+    const { context, indexer, vaultPath } = await createFakeContext();
+    await fs.writeFile(path.join(vaultPath, 'existing.md'), 'original content', 'utf-8');
+
+    await expect(dispatchMcpTool(
+      'obsidian_create_note',
+      { file_path: 'existing.md', content: 'replacement content' },
+      context,
+    )).rejects.toThrow(/Note already exists/);
+    await expect(fs.readFile(path.join(vaultPath, 'existing.md'), 'utf-8')).resolves.toBe('original content');
+    expect(indexer.indexFile).not.toHaveBeenCalled();
+
+    await dispatchMcpTool(
+      'obsidian_create_note',
+      { file_path: 'existing.md', content: 'replacement content', overwrite: true },
+      context,
+    );
+
+    await expect(fs.readFile(path.join(vaultPath, 'existing.md'), 'utf-8')).resolves.toBe('replacement content');
+    expect(indexer.indexFile).toHaveBeenCalledWith(vaultPath, 'existing.md', null, null);
   });
 
   it('bootstraps obsidian_set_vault when no vault is configured, then keeps overrides in that vault', async () => {
