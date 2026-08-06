@@ -85,6 +85,24 @@ describe('Daily Note Logic', () => {
     await expect(getDailyNoteConfig(vaultDir)).rejects.toThrow('traversal');
   });
 
+  it('falls back to defaults when .obsidian is a symlink pointing outside the vault', async () => {
+    const sharedConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'shared-obsidian-'));
+    try {
+      await fs.writeFile(
+        path.join(sharedConfigDir, 'daily-notes.json'),
+        JSON.stringify({ folder: 'Journal', format: 'YYYY-MM-DD' }),
+      );
+      await fs.symlink(sharedConfigDir, path.join(vaultDir, '.obsidian'), 'dir');
+
+      const dailyConfig = await getDailyNoteConfig(vaultDir);
+
+      expect(dailyConfig.folder).toBe('');
+      expect(dailyConfig.format).toBe('YYYY-MM-DD');
+    } finally {
+      await fs.rm(sharedConfigDir, { recursive: true, force: true });
+    }
+  });
+
   it('falls back to defaults if config is missing', async () => {
     const dailyConfig = await getDailyNoteConfig(vaultDir);
     const dateStr = fixedDate;

@@ -1,8 +1,8 @@
-import { pipeline, Pipeline } from '@xenova/transformers';
+import { pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
 
 export class Embedder {
   private static instance: Embedder;
-  private pipe: Pipeline | null = null;
+  private pipe: FeatureExtractionPipeline | null = null;
   private modelName = 'Xenova/all-MiniLM-L6-v2';
 
   private constructor() {}
@@ -14,10 +14,10 @@ export class Embedder {
     return Embedder.instance;
   }
 
-  private async getPipeline(): Promise<Pipeline> {
+  private async getPipeline(): Promise<FeatureExtractionPipeline> {
     if (!this.pipe) {
       console.error('Loading embedding model...');
-      this.pipe = await pipeline('feature-extraction', this.modelName) as unknown as Pipeline;
+      this.pipe = await pipeline('feature-extraction', this.modelName);
       console.error('Model loaded.');
     }
     return this.pipe!;

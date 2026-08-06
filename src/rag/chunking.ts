@@ -1,4 +1,5 @@
 import md5 from 'md5';
+import { splitMarkdownByHeadingBreadcrumbs } from '../utils.js';
 
 export interface ChunkingOptions {
   minChunkChars?: number;
@@ -64,40 +65,90 @@ export function splitTextForEmbedding(text: string, maxChars: number = DEFAULTS.
   return segments;
 }
 
-export function mergeSegmentsForEmbedding(segments: string[], targetChars: number): string[] {
-  if (segments.length === 0) return [];
-  const merged: string[] = [];
-  let current = '';
-
-  for (const segment of segments) {
-    if (segment.length >= targetChars) {
-      if (current.length > 0) {
-        merged.push(current);
-        current = '';
-      }
-      merged.push(segment);
-      continue;
-    }
-
-    const candidate = current.length > 0 ? `${current}\n\n${segment}` : segment;
-    if (candidate.length <= targetChars) {
-      current = candidate;
-    } else {
-      if (current.length > 0) merged.push(current);
-      current = segment;
-    }
-  }
-
-  if (current.length > 0) merged.push(current);
-  return merged;
-}
-
 export interface NoteMetadata {
   id: string;
   path: string;
   text: string;
-  entities: string;
-  communities: string;
+  embedding_text: string;
+  heading_path: string;
+  entities: string[];
+  communities: string[];
+}
+
+export interface TextSegment {
+  text: string;
+  headingPath: string;
+}
+
+export function mergeTextSegments(segments: TextSegment[], targetChars: number): TextSegment[] {
+  if (segments.length === 0) return [];
+  const merged: TextSegment[] = [];
+  let current: TextSegment | null = null;
+
+  const flush = () => {
+    if (current) {
+      merged.push(current);
+      current = null;
+    }
+  };
+
+  for (const segment of segments) {
+    if (segment.text.length >= targetChars) {
+      flush();
+      merged.push(segment);
+      continue;
+    }
+
+    if (!current) {
+      current = segment;
+      continue;
+    }
+
+    const candidate: string = `${current.text}\n\n${segment.text}`;
+    if (current.headingPath === segment.headingPath && candidate.length <= targetChars) {
+      current = { ...current, text: candidate };
+    } else {
+      flush();
+      current = segment;
+    }
+  }
+
+  flush();
+  return merged;
+}
+
+function buildContextualEmbeddingText(
+  cleanText: string,
+  headingPath: string,
+  entities: string[],
+  communities: string[],
+  maxChunkChars: number,
+): string {
+  // Entities/communities come before the heading so that when the context
+  // budget runs out, right-truncation drops breadcrumb detail rather than
+  // the graph metadata the filters and keyword search depend on.
+  const parts = [];
+  if (entities.length > 0) parts.push(`Entities: ${entities.join(', ')}`);
+  if (communities.length > 0) parts.push(`Communities: ${communities.join(', ')}`);
+  if (headingPath.length > 0) parts.push(`Heading: ${headingPath}`);
+
+  if (parts.length === 0) {
+    return cleanText.length > maxChunkChars ? cleanText.slice(0, maxChunkChars) : cleanText;
+  }
+
+  const context = parts.join(' | ');
+  // Wrapper: "[METADATA: " (11) + "]\n\n" (3) = 14 chars
+  const wrapperOverhead = 14;
+  const contextBudget = Math.max(0, maxChunkChars - wrapperOverhead);
+  const minContextChars = Math.min(20, contextBudget, context.length);
+  const maxBaseTextLen = Math.max(0, maxChunkChars - wrapperOverhead - minContextChars);
+  const baseText = cleanText.length > maxBaseTextLen ? cleanText.slice(0, maxBaseTextLen) : cleanText;
+  const availableContextChars = Math.max(0, maxChunkChars - baseText.length - wrapperOverhead);
+  const contextual = context.length > availableContextChars
+    ? context.slice(0, availableContextChars)
+    : context;
+
+  return `[METADATA: ${contextual}]\n\n${baseText}`;
 }
 
 export function buildEmbeddingInputs(relativePath: string, body: string, options?: ChunkingOptions): { 
@@ -108,71 +159,42 @@ export function buildEmbeddingInputs(relativePath: string, body: string, options
   const maxChunkChars = options?.maxChunkChars ?? DEFAULTS.maxChunkChars;
   const targetChunkChars = options?.targetChunkChars ?? DEFAULTS.targetChunkChars;
 
-  const paragraphs = body.split(/\n\s*\n/).filter(p => p.trim().length > 0);
-  const rawSegments: string[] = [];
+  const blocks = splitMarkdownByHeadingBreadcrumbs(body);
+  const rawSegments: TextSegment[] = [];
   const chunkMetadata: NoteMetadata[] = [];
 
-  for (let i = 0; i < paragraphs.length; i++) {
-    const paragraph = paragraphs[i].trim();
+  for (const block of blocks) {
+    const paragraph = block.text.trim();
     if (paragraph.length < minChunkChars) continue;
 
     const segments = splitTextForEmbedding(paragraph, maxChunkChars);
-    for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
-      const segment = segments[segmentIndex];
+    for (const segment of segments) {
       if (segment.length < minChunkChars) continue;
-      rawSegments.push(segment);
+      rawSegments.push({ text: segment, headingPath: block.headingPath });
     }
   }
 
-  const textsToEmbed = mergeSegmentsForEmbedding(rawSegments, Math.min(targetChunkChars, maxChunkChars));
-  const entities = options?.graphMetadata?.entities;
-  const communities = options?.graphMetadata?.communities;
+  const cleanChunks = mergeTextSegments(rawSegments, Math.min(targetChunkChars, maxChunkChars));
+  const entities = options?.graphMetadata?.entities ?? [];
+  const communities = options?.graphMetadata?.communities ?? [];
+  const textsToEmbed = cleanChunks.map((chunk) =>
+    buildContextualEmbeddingText(chunk.text, chunk.headingPath, entities, communities, maxChunkChars)
+  );
 
-  // Wrapper: "[METADATA: " (11) + "]\n\n" (3) = 14 chars
-  const wrapperOverhead = 14;
-  const minMetadataChars = 20; // Ensure at least 20 chars of metadata if present
-
-  const finalTexts = textsToEmbed.map(text => {
-    const hasMetadata = (entities && entities.length > 0) || (communities && communities.length > 0);
-    
-    // If we have metadata, we MUST leave room for it.
-    // We truncate the base text to ensure at least minMetadataChars can fit.
-    const effectiveMaxTextLen = hasMetadata 
-      ? maxChunkChars - wrapperOverhead - minMetadataChars
-      : maxChunkChars;
-
-    const baseText = text.length > effectiveMaxTextLen ? text.slice(0, effectiveMaxTextLen) : text;
-
-    if (!hasMetadata) {
-      return baseText;
-    }
-
-    const parts = [];
-    if (entities && entities.length > 0) parts.push(`Entities: ${entities.join(', ')}`);
-    if (communities && communities.length > 0) parts.push(`Communities: ${communities.join(', ')}`);
-    const fullMetaContent = parts.join(' | ');
-
-    const available = maxChunkChars - baseText.length - wrapperOverhead;
-    // available will be at least minMetadataChars (20) because of effectiveMaxTextLen
-
-    const truncatedMeta = fullMetaContent.length > available
-      ? fullMetaContent.slice(0, available)
-      : fullMetaContent;
-
-    return `[METADATA: ${truncatedMeta}]\n\n${baseText}`;
-  });
-
-  for (let chunkIndex = 0; chunkIndex < finalTexts.length; chunkIndex++) {
+  for (let chunkIndex = 0; chunkIndex < cleanChunks.length; chunkIndex++) {
+    const cleanChunk = cleanChunks[chunkIndex];
     const meta: NoteMetadata = {
       id: md5(`${relativePath}-${chunkIndex}`),
       path: relativePath,
-      text: finalTexts[chunkIndex],
-      entities: (entities && entities.length > 0) ? entities.join(', ') : '',
-      communities: (communities && communities.length > 0) ? communities.join(', ') : '',
+      text: cleanChunk.text,
+      embedding_text: textsToEmbed[chunkIndex],
+      heading_path: cleanChunk.headingPath,
+      entities,
+      communities,
     };
     
     chunkMetadata.push(meta);
   }
 
-  return { textsToEmbed: finalTexts, chunkMetadata };
+  return { textsToEmbed, chunkMetadata };
 }

@@ -1,3 +1,42 @@
+# Release v2.0.0
+
+## Summary
+
+Version 2.0.0 renames the project to Obsidian Vault MCP, adds first-class support for Claude Code, Codex, OpenCode, Gemini CLI, and generic MCP hosts, and strengthens the local RAG pipeline for reliable multi-host use.
+
+## Highlights
+
+- Published as `@jabez007/obsidian-vault-mcp`, with host manifests pinned to major version 2.
+- Consolidated all 18 MCP tools into one registry shared by MCP and one-shot CLI dispatch.
+- Added graph-aware hybrid retrieval with heading breadcrumbs and exact entity/community filters.
+- Added an explicit LanceDB schema, schema-version migrations, cross-process index locking, and stale-index notices.
+- Added Claude Code marketplace packaging and OpenCode configuration while retaining Codex and Gemini support.
+- Added vault-boundary enforcement that resolves symlinks before allowing per-call path overrides.
+- Protected create and move operations from replacing notes unless `overwrite: true` is explicit.
+- Added automatic synchronization for host metadata, generated plugin assets, package versions, and license declarations.
+
+## Breaking Changes
+
+- The project and MCP server key changed from `gemini-obsidian` to `obsidian-vault-mcp`.
+- New configuration writes use `~/.obsidian-mcp.config.json`; the legacy Gemini-named file remains a read-only fallback.
+- Existing local RAG indexes must be rebuilt for the version 3 schema.
+
+## Upgrade
+
+Reinstall host integrations that reference the old project name, then rebuild the local index:
+
+```sh
+npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index --force_reindex true
+```
+
+The first embedding request may download the local model from Hugging Face if it is not already cached.
+
+## Known Dependency Advisories
+
+Four high-severity transitive advisories remain in `adm-zip` and `sharp` through `@huggingface/transformers`. `adm-zip` has no fixed release. The `sharp` issues are fixed in 0.35.0, but Transformers 4.2.0 still constrains installations to the vulnerable 0.34.x line. The affected ZIP extraction and image-processing paths are not exposed by the text-only MCP tools; see `SECURITY.md` for details.
+
+---
+
 # Release v1.8.0
 
 ## Summary
@@ -105,7 +144,7 @@ This release introduces workspace-aware metadata storage, providing better isola
 # Release v1.4.0
 
 ## Summary
-This release is a major step forward for `gemini-obsidian`, focusing on security, architecture, and developer productivity. We have implemented critical security hardening to prevent path traversal vulnerabilities, refactored the RAG (Retrieval-Augmented Generation) engine for better maintainability, and introduced powerful new tools for surgical manipulation of Markdown sections. Additionally, a full testing suite and CI/CD pipeline have been established to ensure ongoing stability.
+This release is a major step forward for `obsidian-vault-mcp`, focusing on security, architecture, and developer productivity. We have implemented critical security hardening to prevent path traversal vulnerabilities, refactored the RAG (Retrieval-Augmented Generation) engine for better maintainability, and introduced powerful new tools for surgical manipulation of Markdown sections. Additionally, a full testing suite and CI/CD pipeline have been established to ensure ongoing stability.
 
 ## New Features
 - **Surgical Section Tools**:

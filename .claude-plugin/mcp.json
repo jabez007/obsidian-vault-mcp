@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "obsidian-vault-mcp": {
+      "command": "bash",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/claude-mcp-server.sh"
+      ]
+    }
+  }
+}

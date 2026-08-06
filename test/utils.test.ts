@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as path from 'path';
 import matter from 'gray-matter';
 import {
@@ -11,6 +11,7 @@ import {
   replaceInNote,
   stripHeadingFromLink,
   applyFrontmatterUpdate,
+  splitMarkdownByHeadingBreadcrumbs,
 } from '../src/utils';
 
 describe('extractWikilinks', () => {
@@ -63,6 +64,57 @@ describe('replaceSection', () => {
     expect(result).toContain('## Only');
     expect(result).toContain('Replaced');
     expect(result).not.toContain('Old content');
+  });
+});
+
+describe('splitMarkdownByHeadingBreadcrumbs', () => {
+  it('annotates paragraph blocks with active heading breadcrumbs', () => {
+    const blocks = splitMarkdownByHeadingBreadcrumbs([
+      'Preface paragraph.',
+      '',
+      '# Project',
+      '',
+      'Top-level project paragraph.',
+      '',
+      '## Risks',
+      '',
+      'Risk paragraph.',
+      '',
+      '### Detail',
+      '',
+      'Detail paragraph.',
+      '',
+      '## Mitigations',
+      '',
+      'Mitigation paragraph.',
+    ].join('\n'));
+
+    expect(blocks).toEqual([
+      { text: 'Preface paragraph.', headingPath: '' },
+      { text: 'Top-level project paragraph.', headingPath: 'Project' },
+      { text: 'Risk paragraph.', headingPath: 'Project > Risks' },
+      { text: 'Detail paragraph.', headingPath: 'Project > Risks > Detail' },
+      { text: 'Mitigation paragraph.', headingPath: 'Project > Mitigations' },
+    ]);
+  });
+
+  it('treats fenced code block contents as content, not headings or breaks', () => {
+    const blocks = splitMarkdownByHeadingBreadcrumbs([
+      '# Setup',
+      '',
+      '```bash',
+      '# install deps',
+      '',
+      'npm ci',
+      '```',
+      '',
+      'After the fence.',
+    ].join('\n'));
+
+    expect(blocks).toEqual([
+      { text: '```bash\n# install deps\n\nnpm ci\n```', headingPath: 'Setup' },
+      { text: 'After the fence.', headingPath: 'Setup' },
+    ]);
   });
 });
 
@@ -148,6 +200,28 @@ describe('getSafeFilePath', () => {
     const inside = path.join(vault, 'notes', 'file.md');
     const result = getSafeFilePath(vault, inside);
     expect(result).toBe(inside);
+  });
+
+  it('ignores malformed OBSIDIAN_ALLOWED_VAULTS entries while checking the vault root', () => {
+    const originalAllowedVaults = process.env.OBSIDIAN_ALLOWED_VAULTS;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env.OBSIDIAN_ALLOWED_VAULTS = ['relative-vault', vault].join(path.delimiter);
+
+    try {
+      const result = getSafeFilePath(vault, 'notes/hello.md');
+
+      expect(result).toBe(path.resolve(vault, 'notes/hello.md'));
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Ignoring non-absolute OBSIDIAN_ALLOWED_VAULTS entry: relative-vault',
+      );
+    } finally {
+      warnSpy.mockRestore();
+      if (originalAllowedVaults === undefined) {
+        delete process.env.OBSIDIAN_ALLOWED_VAULTS;
+      } else {
+        process.env.OBSIDIAN_ALLOWED_VAULTS = originalAllowedVaults;
+      }
+    }
   });
 });
 

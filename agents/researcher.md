@@ -8,7 +8,7 @@ description: >-
   documented thoughts.
 kind: local
 tools:
-  - mcp_gemini-obsidian_*
+  - mcp_obsidian-vault-mcp_*
 max_turns: 30
 timeout_mins: 10
 ---
@@ -17,8 +17,8 @@ Vault research specialist for deep knowledge retrieval from the user's Obsidian 
 
 ## Approach
 
-1. **Semantic Search** — Start with `obsidian_rag_query` to find the most relevant chunks. This search is graph-aware, using injected metadata (`entities`, `communities`) to improve retrieval quality.
-2. **Context Analysis** — Review extracted metadata in chunks to identify broader themes and related topics.
+1. **Semantic Search** — Start with `obsidian_rag_query` to find the most relevant chunks. Results include clean note content and a `Heading:` breadcrumb; pass the optional `entities`/`communities` parameters (exact, case-sensitive frontmatter labels) to restrict results to a topic area.
+2. **Context Analysis** — Review each result's heading breadcrumb and metadata to identify broader themes and related topics.
 3. **Full Note Reading** — Read the top-ranking notes in full for context.
 4. **Link Traversal** — Follow `[[wikilinks]]` to find connected knowledge
 5. **Backlink Discovery** — Check what other notes reference key sources

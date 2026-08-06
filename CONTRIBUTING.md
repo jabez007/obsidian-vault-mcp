@@ -1,4 +1,4 @@
-# Contributing to Gemini Obsidian Extension
+# Contributing to Obsidian Vault MCP Extension
 
 Thank you for your interest in contributing! We welcome pull requests, bug reports, and feature suggestions to make this the best AI companion for Obsidian users.
 
@@ -6,8 +6,8 @@ Thank you for your interest in contributing! We welcome pull requests, bug repor
 
 1.  **Fork and Clone**
     ```bash
-    git clone https://github.com/YOUR_USERNAME/gemini-obsidian.git
-    cd gemini-obsidian
+    git clone https://github.com/YOUR_USERNAME/obsidian-vault-mcp.git
+    cd obsidian-vault-mcp
     ```
 
 2.  **Install Dependencies**

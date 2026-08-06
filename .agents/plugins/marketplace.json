@@ -1,14 +1,14 @@
 {
-  "name": "gemini-obsidian-repo",
+  "name": "obsidian-vault-mcp-repo",
   "interface": {
-    "displayName": "Gemini Obsidian Repo"
+    "displayName": "Obsidian Vault MCP Repo"
   },
   "plugins": [
     {
-      "name": "gemini-obsidian",
+      "name": "obsidian-vault-mcp",
       "source": {
         "source": "local",
-        "path": "./plugins/gemini-obsidian"
+        "path": "./plugins/obsidian-vault-mcp"
       },
       "policy": {
         "installation": "AVAILABLE",

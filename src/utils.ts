@@ -1,5 +1,88 @@
 import * as path from 'path';
+import * as fs from 'fs';
 import matter from 'gray-matter';
+
+export function getFirstEnv(...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = process.env[key];
+    if (typeof value === 'string' && value.length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+export function parseAllowedVaultRoots(): string[] | null {
+  const raw = getFirstEnv(
+    'OBSIDIAN_ALLOWED_VAULTS',
+    'CODEX_OBSIDIAN_ALLOWED_VAULTS',
+    'GEMINI_OBSIDIAN_ALLOWED_VAULTS',
+  );
+  if (!raw) return null;
+  return raw
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function entryExists(candidatePath: string): boolean {
+  try {
+    fs.lstatSync(candidatePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const MAX_SYMLINK_DEPTH = 40;
+
+export function resolveRealPathAllowMissing(candidatePath: string, symlinkDepth: number = 0): string {
+  if (!path.isAbsolute(candidatePath)) {
+    throw new Error(`Path must be absolute: ${candidatePath}`);
+  }
+  if (symlinkDepth > MAX_SYMLINK_DEPTH) {
+    throw new Error(`Too many symbolic links: ${candidatePath}`);
+  }
+
+  const resolvedPath = path.resolve(candidatePath);
+  let existingPath = resolvedPath;
+  const missingParts: string[] = [];
+
+  // Walk up with lstat so a dangling symlink counts as existing; treating it
+  // as missing would let a link pointing outside the boundary masquerade as
+  // an in-boundary file that a later write then creates at the link target.
+  while (!entryExists(existingPath)) {
+    const parent = path.dirname(existingPath);
+    if (parent === existingPath) break;
+    missingParts.unshift(path.basename(existingPath));
+    existingPath = parent;
+  }
+
+  let realExistingPath: string;
+  try {
+    realExistingPath = fs.realpathSync.native(existingPath);
+  } catch {
+    // realpath fails when the deepest existing entry is a dangling symlink:
+    // resolve the link target manually and keep resolving from there.
+    const linkTarget = fs.readlinkSync(existingPath);
+    realExistingPath = resolveRealPathAllowMissing(
+      path.resolve(path.dirname(existingPath), linkTarget),
+      symlinkDepth + 1,
+    );
+  }
+
+  return missingParts.length > 0
+    ? path.join(realExistingPath, ...missingParts)
+    : realExistingPath;
+}
+
+export function isPathContainedByRoot(candidatePath: string, rootPath: string): boolean {
+  const relativePath = path.relative(rootPath, candidatePath);
+  return (
+    relativePath === '' ||
+    (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))
+  );
+}
 
 /**
  * Resolve a user-supplied relative path against a vault root, ensuring
@@ -9,6 +92,23 @@ export function getSafeFilePath(vaultPath: string, userInputPath: string): strin
   const resolvedVault = path.resolve(vaultPath);
   const resolvedTarget = path.resolve(resolvedVault, userInputPath);
   if (!resolvedTarget.startsWith(resolvedVault + path.sep) && resolvedTarget !== resolvedVault) {
+    throw new Error("Security Error: Path traversal detected.");
+  }
+  const realVault = resolveRealPathAllowMissing(resolvedVault);
+  const realTarget = resolveRealPathAllowMissing(resolvedTarget);
+  const allowedRoots = [realVault];
+  for (const root of parseAllowedVaultRoots() ?? []) {
+    if (!path.isAbsolute(root)) {
+      console.warn(`Ignoring non-absolute OBSIDIAN_ALLOWED_VAULTS entry: ${root}`);
+      continue;
+    }
+    try {
+      allowedRoots.push(resolveRealPathAllowMissing(root));
+    } catch (error) {
+      console.warn(`Ignoring invalid OBSIDIAN_ALLOWED_VAULTS entry: ${root}`, error);
+    }
+  }
+  if (!allowedRoots.some((root) => isPathContainedByRoot(realTarget, root))) {
     throw new Error("Security Error: Path traversal detected.");
   }
   return resolvedTarget;
@@ -34,6 +134,76 @@ export interface SectionRange {
   bodyStart: number;
   bodyEnd: number;
   level: number;
+}
+
+export interface MarkdownBreadcrumbBlock {
+  text: string;
+  headingPath: string;
+}
+
+/**
+ * Split markdown into paragraph blocks annotated with the active H1-H6 path.
+ * Fenced code blocks are kept intact: their lines (including blank lines and
+ * `#` comments) are treated as content, never as headings or block breaks.
+ */
+export function splitMarkdownByHeadingBreadcrumbs(content: string): MarkdownBreadcrumbBlock[] {
+  const blocks: MarkdownBreadcrumbBlock[] = [];
+  const headingStack: Array<{ level: number; text: string }> = [];
+  let currentLines: string[] = [];
+  let activeFence: string | null = null;
+
+  const flush = () => {
+    const text = currentLines.join('\n').trim();
+    if (text.length > 0) {
+      blocks.push({
+        text,
+        headingPath: headingStack.map((entry) => entry.text).join(' > '),
+      });
+    }
+    currentLines = [];
+  };
+
+  for (const line of content.split(/\r?\n/)) {
+    const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    if (activeFence) {
+      if (
+        fenceMatch &&
+        fenceMatch[1][0] === activeFence[0] &&
+        fenceMatch[1].length >= activeFence.length
+      ) {
+        activeFence = null;
+      }
+      currentLines.push(line);
+      continue;
+    }
+    if (fenceMatch) {
+      activeFence = fenceMatch[1];
+      currentLines.push(line);
+      continue;
+    }
+
+    const headingMatch = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    if (headingMatch) {
+      flush();
+      const level = headingMatch[1].length;
+      const headingText = headingMatch[2].replace(/\s+#+\s*$/, '').trim();
+      while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) {
+        headingStack.pop();
+      }
+      headingStack.push({ level, text: headingText });
+      continue;
+    }
+
+    if (line.trim().length === 0) {
+      flush();
+      continue;
+    }
+
+    currentLines.push(line);
+  }
+
+  flush();
+  return blocks;
 }
 
 /**

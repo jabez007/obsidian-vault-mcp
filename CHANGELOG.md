@@ -2,6 +2,75 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.0] - 2026-08-04
+
+### Breaking Changes
+
+- Renamed the project from `gemini-obsidian` to `obsidian-vault-mcp`. The MCP
+  server key in host configs and the Codex plugin name changed accordingly —
+  update any configuration referencing `gemini-obsidian` and reinstall the
+  Codex plugin from the repo marketplace.
+- Configuration writes now go only to `~/.obsidian-mcp.config.json`. The
+  legacy `~/.gemini-obsidian.config.json` is still read as a fallback but is
+  no longer updated.
+
+### Features
+
+- Claude Code support: the repo is now a Claude Code plugin marketplace
+  (`.claude-plugin/marketplace.json`). The plugin bundles the built server
+  and installs its runtime dependencies from the pinned lockfile on first
+  launch, and a SessionStart hook reports vault status and refreshes the
+  RAG index.
+- OpenCode support: an `opencode.json` config launches the server from a
+  local checkout.
+- The package is published to npm as `@jabez007/obsidian-vault-mcp`. Host
+  manifests now launch it via `npx -y @jabez007/obsidian-vault-mcp@2`
+  (pinned to the current major) instead of a repo-relative build, so
+  installed extensions and plugins no longer require an in-place
+  `npm install && npm run build`.
+- Storage roots migrate automatically: on first access, an existing
+  `.gemini-obsidian/` storage directory (global or workspace) is renamed to
+  `.obsidian-vault-mcp/`, preserving indexes and file hashes.
+- The MCP server reads its name and version from `package.json` at runtime,
+  and tests enforce that all host manifests match the package version.
+
+### Security
+
+- Added `OBSIDIAN_ALLOWED_VAULTS` plus `CODEX_` and `GEMINI_` variants to
+  bound per-call `vault_path` and `workspace_path` overrides. When unset,
+  overrides must resolve to the configured vault or workspace after bootstrap.
+  Symlinks are resolved before enforcement so prompt-injected note content
+  cannot redirect tools to arbitrary filesystem locations.
+- `obsidian_move_note` now refuses to replace an existing destination unless
+  callers pass `overwrite: true`.
+- `obsidian_create_note` now refuses to replace an existing note unless
+  callers pass `overwrite: true`.
+
+### Refactor
+
+- Extracted all 18 tools into a single registry (`src/tools/`) that generates
+  the MCP tool list, MCP dispatch, and CLI one-shot dispatch from one source.
+- Fixed CLI boolean flag parsing (`--force_reindex true` previously did
+  nothing) and `obsidian_rag_query` relevance output (hybrid search returns
+  `_relevance_score`, which previously printed as `undefined`).
+
+### Dependencies
+
+- Migrated the embedding stack from the deprecated `@xenova/transformers` 2.x
+  to `@huggingface/transformers` 4.x. This unpins `onnxruntime-node` (1.14.0
+  from 2023 → current), drops the direct `sharp` dependency, removes the
+  runtime version-check guard, and updates the supported inference runtime.
+- Updated transitive dependencies, including `protobufjs` 7.6.5. Four
+  high-severity `npm audit` findings remain in `adm-zip` and `sharp` through
+  `@huggingface/transformers`. `adm-zip` has no fixed release; `sharp` is fixed
+  in 0.35.0, but Transformers 4.2.0 still resolves the vulnerable 0.34.5 line.
+  See `SECURITY.md` for exposure details.
+- Existing RAG indexes remain loadable (same model, `Xenova/all-MiniLM-L6-v2`,
+  384 dimensions), but vectors produced by the new stack are not numerically
+  identical to old ones. A mixed index of old and new chunks degrades ranking
+  quality without any visible error. Run a one-time full rebuild after
+  upgrading: `obsidian_rag_index` with `force_reindex: true`.
+
 ## [1.8.2] - 2026-05-12
 
 ### Features

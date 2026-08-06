@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "obsidian-vault-mcp",
+  "displayName": "Obsidian Vault MCP",
+  "version": "2.0.0",
+  "description": "Obsidian vault MCP server with local RAG capabilities for Claude Code.",
+  "author": {
+    "name": "jabez007",
+    "url": "https://github.com/jabez007"
+  },
+  "homepage": "https://github.com/jabez007/obsidian-vault-mcp",
+  "repository": "https://github.com/jabez007/obsidian-vault-mcp",
+  "license": "ISC",
+  "keywords": [
+    "claude-code",
+    "obsidian",
+    "rag",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "commands": [],
+  "agents": [],
+  "mcpServers": "./.mcp.json"
+}

@@ -68,7 +68,7 @@ This skill enables you to act as an expert companion for the user's Obsidian Vau
 **User:** "Index my vault."
 **Agent:** `obsidian_rag_index(vault_path="/Users/me/Vault")`
 
-**User:** "Index my vault at /Users/me/Vault but keep the index in /Users/me/Project/.gemini-obsidian"
+**User:** "Index my vault at /Users/me/Vault but keep the index in /Users/me/Project/.obsidian-vault-mcp"
 **Agent:** `obsidian_rag_index(vault_path="/Users/me/Vault", workspace_path="/Users/me/Project")`
 
 **User:** "Find the recipe for lasagna."
