@@ -740,11 +740,11 @@ export class VaultIndexer {
       const result = await this.indexNoteIntoTable(table, embedder, vaultPath, normalizedPath);
       if (!result.success) return result;
 
+      // Hashes track successfully processed notes, including notes with no
+      // chunks. Their membership must still match the freshness metadata.
+      hashes[normalizedPath] = result.contentHash!;
       if (result.chunks && result.chunks > 0) {
-        hashes[normalizedPath] = result.contentHash!;
         console.error(`Indexed ${result.chunks} chunks for ${relativePath}.`);
-      } else {
-        delete hashes[normalizedPath];
       }
       await this.writeJsonAtomic(hashPath, hashes);
       await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
@@ -1018,8 +1018,15 @@ export class VaultIndexer {
       if (canIncremental && changedPaths.length === 0 && deletedPaths.length === 0 && failedFiles === 0) {
         console.error('Index is up to date, no changes detected.');
         if (maintenance) await this.maintainTable(table);
-        await this.writeJsonAtomic(hashPath, currentHashes);
-        await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
+        // A new indexedAt timestamp would invalidate an otherwise identical
+        // export. Refresh metadata only to repair it or record changed file
+        // stats, such as a timestamp-only touch that this scan reconciled.
+        const metadata = await this.readIndexMetadata(metadataPath);
+        if (!metadata || !Number.isFinite(metadata.indexedAt) ||
+            metadata.fileCount !== indexStartSnapshot.fileCount ||
+            metadata.latestMtimeMs !== indexStartSnapshot.latestMtimeMs) {
+          await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
+        }
         return { success: true, chunks: 0, message: maintenance ? 'Index up to date. Maintenance completed.' : 'Index up to date, no changes detected.', maintenancePerformed: maintenance };
       }
 

@@ -124,6 +124,67 @@ describe('index snapshots', () => {
     expect((await fs.stat(path.join(first.snapshotPath, 'snapshot.json'))).mtimeMs).toBe(manifestStat.mtimeMs);
   });
 
+  it('reuses an export after an unchanged vault scan without another compaction', async () => {
+    await seed();
+    const first = await prepare();
+    const before = await inventory(first.snapshotPath);
+    const sourceBefore = await inventory(store);
+    const optimize = vi.spyOn(await tablePrototype(), 'optimize');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1000);
+    expect(await indexer.indexVault(vault, false, tmp, 'snapshot')).toMatchObject({ success: true, chunks: 0, maintenancePerformed: false });
+    clock.mockRestore();
+    expect(await inventory(store)).toEqual(sourceBefore);
+    expect(await prepare()).toEqual({ ...first, reused: true });
+    expect(optimize).not.toHaveBeenCalled();
+    expect(await inventory(first.snapshotPath)).toEqual(before);
+  });
+
+  it.each(['', ' \n\t ', '---\ntags: [garden]\n---\n'])(
+    'exports successfully after indexing a note with no embeddable content: %j', async content => {
+      await seed();
+      await fs.writeFile(path.join(vault, 'note.md'), content);
+      expect(await indexer.indexFile(vault, 'note.md', tmp, 'snapshot')).toMatchObject({ success: true, chunks: 0 });
+      expect(JSON.parse(await fs.readFile(path.join(store, 'file-hashes.json'), 'utf8')))
+        .toEqual({ 'note.md': createHash('md5').update(content).digest('hex') });
+      const result = await prepare();
+      expect(result.validation.rows).toBe(0);
+      expect(Object.keys(JSON.parse(await fs.readFile(path.join(result.snapshotPath, 'file-hashes.json'), 'utf8')))).toEqual(['note.md']);
+    });
+
+  it('exports a newly created empty note and keeps scan and move bookkeeping consistent', async () => {
+    await seed();
+    const context = createToolContext(indexer, { vault_path: vault, workspace_path: tmp, vault_id: 'snapshot' });
+    await dispatchMcpTool('obsidian_create_note', { file_path: 'empty.md', content: '' }, context);
+    const first = await prepare();
+    expect(first.validation.rows).toBe(1);
+    const hashes = JSON.parse(await fs.readFile(path.join(first.snapshotPath, 'file-hashes.json'), 'utf8'));
+    expect(hashes['empty.md']).toBe(createHash('md5').update('').digest('hex'));
+    expect((await indexer.indexVault(vault, false, tmp, 'snapshot')).maintenancePerformed).toBe(false);
+    expect(await prepare()).toEqual({ ...first, reused: true });
+
+    await fs.rename(path.join(vault, 'empty.md'), path.join(vault, 'moved.md'));
+    expect(await indexer.moveFile(vault, 'empty.md', 'moved.md', tmp, 'snapshot')).toMatchObject({ success: true, chunks: 0 });
+    const moved = await prepare();
+    expect(moved.validation.rows).toBe(1);
+    expect(JSON.parse(await fs.readFile(path.join(moved.snapshotPath, 'file-hashes.json'), 'utf8')))
+      .toEqual({ 'note.md': hashes['note.md'], 'moved.md': hashes['empty.md'] });
+  });
+
+  it.each(['missing metadata', 'timestamp-only touch'])(
+    'still reconciles freshness on an unchanged scan after %s', async change => {
+      await seed();
+      if (change === 'missing metadata') await fs.unlink(path.join(store, 'index-metadata.json'));
+      else {
+        const later = new Date(Date.now() + 10000);
+        await fs.utimes(path.join(vault, 'note.md'), later, later);
+      }
+      expect((await indexer.checkIndexStaleness(vault, tmp, 'snapshot')).stale).toBe(true);
+      expect(await indexer.indexVault(vault, false, tmp, 'snapshot'))
+        .toMatchObject({ success: true, chunks: 0, maintenancePerformed: false });
+      expect((await indexer.checkIndexStaleness(vault, tmp, 'snapshot')).stale).toBe(false);
+      expect((await prepare()).validation.rows).toBe(1);
+    });
+
   it('leaves a published export unchanged while the live database changes and is cleaned up during copying', async () => {
     await seed(2);
     const first = await prepare();
