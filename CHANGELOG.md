@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+- Apply the same markdown eligibility rules to scans, writes, and moves. Non-markdown writes still succeed, and old excluded index entries are removed. Fixes #19.
+- Serialize Claude dependency installation with a bounded `flock` wait. Preserve session-hook failure diagnostics in bounded logs, including failed JSON index results. Fixes #20.
+- Defer per-note LanceDB optimization until a changed vault scan or an explicit `obsidian_rag_index --maintenance true` request. Search remains current between maintenance runs. Retain seven days of table history. Fixes #21.
+
 ## [2.0.0] - 2026-08-04
 
 ### Breaking Changes

@@ -132,6 +132,17 @@ echo 'npm diagnostic'
     expect(await installCount()).toBe(1);
   });
 
+  it('explains the missing flock prerequisite without starting an install', async () => {
+    const bin = path.join(tmp, 'no flock');
+    await fs.mkdir(bin);
+    for (const command of ['bash', 'dirname', 'mkdir']) await fs.symlink(`/bin/${command}`, path.join(bin, command));
+    const result = await launch('claude-mcp-server.sh', [], { PATH: bin }).done;
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('requires flock');
+    await expect(fs.stat(path.join(data, 'calls'))).rejects.toThrow();
+  });
+
   it('recovers after the installing process group dies', async () => {
     const first = launch();
     await waitForFile('install-active');

@@ -42,7 +42,9 @@ claude plugin marketplace add . --scope local
 claude plugin install obsidian-vault-mcp@obsidian-vault-mcp --scope local
 ```
 
-The Claude marketplace uses `.claude-plugin/marketplace.json` and installs the generated wrapper under `plugins/claude-obsidian-vault-mcp/`. That wrapper is generated from `.claude-plugin/plugin.json`, `.claude-plugin/mcp.json`, `.claude-plugin/hooks.json`, root `skills/`, `scripts/session-init.sh`, `scripts/claude-mcp-server.sh`, `package.json`, `package-lock.json`, and `dist/index.js`. The MCP server runs through `scripts/claude-mcp-server.sh`, which installs production dependencies into Claude's `${CLAUDE_PLUGIN_DATA}` directory before launching the bundled server. The `SessionStart` hook runs `scripts/session-init.sh`, which reports vault status and refreshes the RAG index when a vault is configured.
+The Claude marketplace uses `.claude-plugin/marketplace.json` and installs the generated wrapper under `plugins/claude-obsidian-vault-mcp/`. That wrapper is generated from `.claude-plugin/plugin.json`, `.claude-plugin/mcp.json`, `.claude-plugin/hooks.json`, root `skills/`, `scripts/session-init.sh`, `scripts/session-index.mjs`, `scripts/claude-mcp-server.sh`, `package.json`, `package-lock.json`, and `dist/index.js`. The MCP server runs through `scripts/claude-mcp-server.sh`, which installs production dependencies into Claude's `${CLAUDE_PLUGIN_DATA}` directory before launching the bundled server. The `SessionStart` hook runs `scripts/session-init.sh`, which reports vault status and refreshes the RAG index when a vault is configured.
+
+The Claude launcher requires Bash, `sha256sum`, and `flock`. On Linux, `flock` is provided by util-linux. Concurrent launches share an install lock and recheck the dependency stamp after waiting. The lock is released before the server starts. `OBSIDIAN_INSTALL_LOCK_WAIT_SECONDS` sets the maximum wait, in seconds, and defaults to `120`.
 
 ### Codex CLI plugin
 
@@ -193,7 +195,23 @@ The first time you use a tool, the server can persist `vault_path`, `workspace_p
 - **Module Not Found Error**: If you see an error like `Cannot find module '@lancedb/lancedb'`, launch through `npx -y @jabez007/obsidian-vault-mcp@2` so npm installs runtime dependencies automatically. For local development, run `npm install && npm run build`.
 - **Logs**: Since this runs as an MCP server, errors are typically output to stderr.
 
+If the session hook reports `RAG index refresh failed`, open the log path included in its message. The hook keeps the five newest failure logs, each limited to the last 64 KiB of diagnostics, under `${CLAUDE_PLUGIN_DATA}/logs`. Other hosts use `${XDG_STATE_HOME}/obsidian-vault-mcp/logs`, or `~/.local/state/obsidian-vault-mcp/logs` when `XDG_STATE_HOME` is unset. Logs include stderr, the CLI response, and exit status. Successful runs do not retain a log.
+
+Search indexes lowercase `.md` files outside hidden files and directories. This rule applies to vault scans, individual writes, and moves. Tools can still create text configuration files such as `.base` or `.yaml`; those files are excluded from search. Rewriting an excluded file removes any old rows for that path. A vault scan also reconciles old excluded entries and deleted files.
+
 ## Indexing Performance Tuning
+
+Individual writes and moves update searchable content immediately without optimizing the whole table. A vault scan that changes the index runs maintenance once at the end. An unchanged scan skips maintenance, including session-start scans.
+
+After a batch of edits, call `obsidian_rag_index` with `maintenance: true` to compact fragments and update search indexes even when all note hashes already match. From a built local checkout:
+
+```bash
+node dist/index.js obsidian_rag_index --maintenance true
+```
+
+Explicit maintenance uses the same per-vault index lock as writes and reports `maintenancePerformed: true` on success. It cannot be combined with `file_path`. Full-text and semantic queries include rows added since the last maintenance run, but querying many unindexed fragments can take longer.
+
+Maintenance retains seven days of table history and leaves unverified-file deletion disabled. Compaction can temporarily increase retained bytes because recent versions still reference older files. It does not remove objects from existing Git LFS history. For repeatable storage and latency measurements, see [the maintenance benchmark](docs/index-maintenance-benchmark.md).
 
 > [!WARNING]
 > Initial semantic indexing can be time- and resource-intensive, especially on large vaults.
@@ -219,7 +237,7 @@ npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index
 ## Host-specific assets
 
 - **Canonical shared assets** live at the repo root. Edit `skills/` for skills and `agents/` for local agents; do not edit generated host copies by hand.
-- **Claude Code** uses `.claude-plugin/marketplace.json` and the generated wrapper under `plugins/claude-obsidian-vault-mcp/`. The wrapper contains Claude-specific `.claude-plugin/plugin.json`, `.mcp.json`, `hooks/hooks.json`, `skills/`, `scripts/session-init.sh`, `scripts/claude-mcp-server.sh`, package manifests, and `dist/index.js`.
+- **Claude Code** uses `.claude-plugin/marketplace.json` and the generated wrapper under `plugins/claude-obsidian-vault-mcp/`. The wrapper contains Claude-specific `.claude-plugin/plugin.json`, `.mcp.json`, `hooks/hooks.json`, `skills/`, `scripts/session-init.sh`, `scripts/session-index.mjs`, `scripts/claude-mcp-server.sh`, package manifests, and `dist/index.js`.
 - **Codex package/checkouts** use `.codex-plugin/plugin.json`, `.mcp.json`, `skills/`, and `agents/` from the repo root.
 - **Codex repo marketplace installs** use `.agents/plugins/marketplace.json` and the plugin wrapper under `plugins/obsidian-vault-mcp/`. The wrapper's `.codex-plugin/`, `.mcp.json`, and `skills/` are generated from the root assets.
 - **OpenCode** uses `opencode.json` with its top-level `mcp` configuration and the built `dist/index.js` from this checkout.

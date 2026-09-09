@@ -33481,7 +33481,11 @@ function chunkingOptionsFromEnv() {
 function sleep(ms2) {
   return new Promise((resolve3) => setTimeout(resolve3, ms2));
 }
-var lancedb, fs5, path4, os2, crypto, import_apache_arrow, import_gray_matter2, import_md52, STORAGE_DIR_NAME, LEGACY_STORAGE_DIR_NAME, INDEX_LOCK_FILE_NAME, INDEX_METADATA_FILE_NAME, SCHEMA_VERSION_FILE_NAME, NOTES_TABLE_NAME, NOTES_TABLE_SCHEMA_VERSION, EMBEDDING_DIMENSIONS, FULL_REINDEX_REQUIRED_MESSAGE, SEARCH_RESULT_COLUMNS, NOTES_TABLE_SCHEMA, VaultIndexer;
+function isIndexableNotePath(relativePath) {
+  const normalized = path4.posix.normalize(relativePath.replace(/\\/g, "/"));
+  return normalized.endsWith(".md") && !normalized.split("/").some((segment) => segment.startsWith("."));
+}
+var lancedb, fs5, path4, os2, crypto, import_apache_arrow, import_gray_matter2, import_md52, STORAGE_DIR_NAME, LEGACY_STORAGE_DIR_NAME, INDEX_LOCK_FILE_NAME, INDEX_METADATA_FILE_NAME, SCHEMA_VERSION_FILE_NAME, NOTES_TABLE_NAME, NOTES_TABLE_SCHEMA_VERSION, EMBEDDING_DIMENSIONS, INDEX_RETENTION_DAYS, FULL_REINDEX_REQUIRED_MESSAGE, SEARCH_RESULT_COLUMNS, NOTES_TABLE_SCHEMA, VaultIndexer;
 var init_store = __esm({
   "src/rag/store.ts"() {
     "use strict";
@@ -33505,6 +33509,7 @@ var init_store = __esm({
     NOTES_TABLE_NAME = "notes";
     NOTES_TABLE_SCHEMA_VERSION = 3;
     EMBEDDING_DIMENSIONS = 384;
+    INDEX_RETENTION_DAYS = 7;
     FULL_REINDEX_REQUIRED_MESSAGE = "RAG index schema version changed. Run obsidian_rag_index with force_reindex=true to rebuild the local index.";
     SEARCH_RESULT_COLUMNS = ["id", "path", "text", "heading_path", "entities", "communities"];
     NOTES_TABLE_SCHEMA = new import_apache_arrow.Schema([
@@ -33551,7 +33556,7 @@ var init_store = __esm({
         if (/[\x00-\x1F\x7F]/.test(normalized)) {
           throw new Error(`Invalid file path (control chars): ${relativePath}`);
         }
-        return normalized;
+        return path4.posix.normalize(normalized);
       }
       async getPaths(vaultPath, workspacePath, vaultId) {
         let vaultIdentifier;
@@ -33718,7 +33723,8 @@ var init_store = __esm({
         return { success: false, message: FULL_REINDEX_REQUIRED_MESSAGE };
       }
       async listMarkdownFiles(vaultPath) {
-        return Ze("**/*.md", { cwd: vaultPath, absolute: true, follow: true });
+        const files = await Ze("**/*.md", { cwd: vaultPath, absolute: true, follow: true, dot: false, nocase: false, nodir: true });
+        return files.filter((file2) => isIndexableNotePath(path4.relative(vaultPath, file2)));
       }
       filterIndexableMarkdownFiles(vaultPath, discoveredFiles) {
         return discoveredFiles.filter((filePath) => {
@@ -33779,7 +33785,7 @@ var init_store = __esm({
         if (!previous) return;
         const [files, fileStat] = await Promise.all([
           this.listMarkdownFiles(vaultPath),
-          fs5.stat(absoluteFilePath).catch(() => null)
+          absoluteFilePath ? fs5.stat(absoluteFilePath).catch(() => null) : null
         ]);
         await this.writeIndexMetadata(metadataPath, {
           fileCount: files.length,
@@ -33950,15 +33956,51 @@ var init_store = __esm({
         await this.addNoteChunks(table, chunks);
         return { success: true, chunks: chunks.length, contentHash };
       }
+      // Called with both locks held. Skipped writes can clean old pollution without
+      // creating a database or loading the embedding model.
+      async removeExcludedPaths(vaultPath, paths, workspacePath, vaultId) {
+        const { dbPath, hashPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+        const exists = await fs5.stat(dbPath).then(() => true).catch((error2) => {
+          if (error2.code === "ENOENT") return false;
+          throw error2;
+        });
+        if (exists) {
+          const db = await this.getDb(vaultPath, workspacePath, vaultId);
+          if (await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) return this.fullReindexRequiredResult();
+          if ((await db.tableNames()).includes(NOTES_TABLE_NAME)) {
+            const table = await db.openTable(NOTES_TABLE_NAME);
+            try {
+              await this.deleteRowsForPaths(table, paths);
+            } finally {
+              table.close();
+            }
+          }
+        }
+        let hashes;
+        try {
+          hashes = JSON.parse(await fs5.readFile(hashPath, "utf8"));
+        } catch (error2) {
+          if (error2.code === "ENOENT") {
+            return { success: true, chunks: 0, message: "File excluded from the markdown index." };
+          }
+          throw error2;
+        }
+        for (const p of paths) delete hashes[p];
+        await this.writeJsonAtomic(hashPath, hashes);
+        return { success: true, chunks: 0, message: "File excluded from the markdown index." };
+      }
       async indexFile(vaultPath, relativePath, workspacePath, vaultId) {
         const release = await this.acquireLock();
         let releaseIndexLock = null;
         try {
           const normalizedPath = this.validatePath(relativePath);
+          const filePath = getSafeFilePath(vaultPath, normalizedPath);
           const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
           releaseIndexLock = await this.acquireIndexLock(lockPath);
+          if (!isIndexableNotePath(normalizedPath)) {
+            return await this.removeExcludedPaths(vaultPath, [normalizedPath], workspacePath, vaultId);
+          }
           const embedder = Embedder.getInstance();
-          const filePath = getSafeFilePath(vaultPath, relativePath);
           const db = await this.getDb(vaultPath, workspacePath, vaultId);
           const tableNames = await db.tableNames();
           if (await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
@@ -33976,7 +34018,6 @@ var init_store = __esm({
           await this.ensureFtsIndex(table);
           const result = await this.indexNoteIntoTable(table, embedder, vaultPath, normalizedPath);
           if (!result.success) return result;
-          await table.optimize();
           if (result.chunks && result.chunks > 0) {
             hashes[normalizedPath] = result.contentHash;
             console.error(`Indexed ${result.chunks} chunks for ${relativePath}.`);
@@ -33996,7 +34037,14 @@ var init_store = __esm({
           release();
         }
       }
-      async indexVault(vaultPath, force = false, workspacePath, vaultId) {
+      // Call only while holding the in-process and per-vault index locks.
+      async maintainTable(table) {
+        await table.optimize({
+          cleanupOlderThan: new Date(Date.now() - INDEX_RETENTION_DAYS * 864e5),
+          deleteUnverified: false
+        });
+      }
+      async indexVault(vaultPath, force = false, workspacePath, vaultId, maintenance = false) {
         const release = await this.acquireLock();
         let releaseIndexLock = null;
         try {
@@ -34009,19 +34057,20 @@ var init_store = __esm({
           const indexStartSnapshot = await this.getVaultIndexSnapshotForFiles(discoveredFiles);
           console.error(`Found ${files.length} notes in ${vaultPath}`);
           let previousHashes = {};
+          let hasHashFile = false;
           if (!force) {
             try {
               previousHashes = JSON.parse(await fs5.readFile(hashPath, "utf-8"));
+              hasHashFile = true;
             } catch {
             }
           }
           const tableNames = await db.tableNames();
           const tableExists = tableNames.includes(NOTES_TABLE_NAME);
-          const hasPreviousHashes = Object.keys(previousHashes).length > 0;
           if (tableExists && !force && await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
             return this.fullReindexRequiredResult();
           }
-          const canIncremental = tableExists && hasPreviousHashes && !force;
+          const canIncremental = tableExists && hasHashFile && !force;
           const currentHashes = canIncremental ? { ...previousHashes } : {};
           const existingRelativePaths = /* @__PURE__ */ new Set();
           for (const f of files) {
@@ -34191,11 +34240,12 @@ var init_store = __esm({
           await this.ensureFtsIndex(table);
           if (canIncremental && changedPaths.length === 0 && deletedPaths.length === 0 && failedFiles === 0) {
             console.error("Index is up to date, no changes detected.");
+            if (maintenance) await this.maintainTable(table);
             await this.writeJsonAtomic(hashPath, currentHashes);
             await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
-            return { success: true, chunks: 0, message: "Index up to date, no changes detected." };
+            return { success: true, chunks: 0, message: maintenance ? "Index up to date. Maintenance completed." : "Index up to date, no changes detected.", maintenancePerformed: maintenance };
           }
-          await table.optimize();
+          await this.maintainTable(table);
           await this.writeJsonAtomic(hashPath, currentHashes);
           if (failedFiles > 0) {
             return {
@@ -34210,7 +34260,7 @@ var init_store = __esm({
           } else {
             console.error(`Indexed ${indexedChunks} chunks.`);
           }
-          return { success: true, chunks: indexedChunks };
+          return { success: true, chunks: indexedChunks, maintenancePerformed: true };
         } finally {
           if (releaseIndexLock) {
             await releaseIndexLock();
@@ -34224,10 +34274,19 @@ var init_store = __esm({
         try {
           const sourcePath = this.validatePath(sourceRelativePath);
           const destPath = this.validatePath(destRelativePath);
+          getSafeFilePath(vaultPath, sourcePath);
+          const filePath = getSafeFilePath(vaultPath, destPath);
+          const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];
           const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
           releaseIndexLock = await this.acquireIndexLock(lockPath);
+          if (!isIndexableNotePath(destPath)) {
+            const result2 = await this.removeExcludedPaths(vaultPath, pathsToDelete, workspacePath, vaultId);
+            if (result2.success && isIndexableNotePath(sourcePath)) {
+              await this.mergeIndexMetadataForFile(metadataPath, vaultPath, null);
+            }
+            return result2;
+          }
           const embedder = Embedder.getInstance();
-          const filePath = getSafeFilePath(vaultPath, destRelativePath);
           const db = await this.getDb(vaultPath, workspacePath, vaultId);
           const tableNames = await db.tableNames();
           if (await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
@@ -34243,10 +34302,8 @@ var init_store = __esm({
             await this.writeNotesSchemaVersion(schemaVersionPath);
           }
           await this.ensureFtsIndex(table);
-          const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];
           const result = await this.indexNoteIntoTable(table, embedder, vaultPath, destPath, pathsToDelete);
           if (!result.success) return result;
-          await table.optimize();
           delete hashes[sourcePath];
           if (result.contentHash) {
             hashes[destPath] = result.contentHash;
@@ -34556,7 +34613,7 @@ var obsidianTools = [
   },
   {
     name: "obsidian_create_note",
-    description: "Create a new note with the given content. Refuses to replace an existing note unless overwrite is true.",
+    description: "Create a note or text configuration file with the given content. Only lowercase .md files outside hidden paths are indexed for search. Refuses to replace an existing file unless overwrite is true.",
     inputSchema: {
       type: "object",
       properties: {
@@ -34720,7 +34777,7 @@ var obsidianTools = [
   },
   {
     name: "obsidian_rag_index",
-    description: "Index the vault for graph-aware semantic search (RAG). Automatically extracts and preserves YAML graph metadata (entities, communities) from frontmatter to enhance search context. If file_path is provided, only that file is re-indexed. Incremental by default \u2014 only re-embeds changed files. Use force_reindex to rebuild from scratch.",
+    description: "Index the vault for graph-aware semantic search (RAG). Preserves YAML entities and communities. If file_path is provided, only that markdown file is re-indexed, without table maintenance. Incremental by default. Use force_reindex to rebuild from scratch, or maintenance to optimize the whole index after a batch of edits even when no files changed. Maintenance retains seven days of table history.",
     inputSchema: {
       type: "object",
       properties: {
@@ -34743,6 +34800,10 @@ var obsidianTools = [
         force_reindex: {
           type: "boolean",
           description: "Force full re-index, ignoring cached file hashes (default: false)"
+        },
+        maintenance: {
+          type: "boolean",
+          description: "Run table maintenance even if no files changed (default: false). Cannot be combined with file_path. Retains seven days of table history."
         }
       }
     },
@@ -34752,6 +34813,10 @@ var obsidianTools = [
       const vaultId = context.getVaultId(args.vault_id);
       const filePath = args.file_path ? String(args.file_path) : null;
       const force = booleanArg(args.force_reindex) || booleanArg(args.force);
+      const maintenance = booleanArg(args.maintenance);
+      if (filePath && maintenance) {
+        throw new Error("maintenance cannot be combined with file_path. Run maintenance on the whole vault.");
+      }
       const result = filePath ? await context.indexer.indexFile(
         vaultPath,
         filePath,
@@ -34761,7 +34826,8 @@ var obsidianTools = [
         vaultPath,
         force,
         workspacePath,
-        vaultId
+        vaultId,
+        maintenance
       );
       return JSON.stringify(result);
     }
