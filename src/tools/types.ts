@@ -30,6 +30,7 @@ export interface VaultIndexerLike {
         force?: boolean,
         workspacePath?: string | null,
         vaultId?: string | null,
+        maintenance?: boolean,
     ): Promise<unknown>;
     moveFile(
         vaultPath: string,

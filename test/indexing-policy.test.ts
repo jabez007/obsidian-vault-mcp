@@ -33,6 +33,7 @@ describe('indexing policy', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await indexer.reset();
     await fs.rm(tmp, { recursive: true, force: true });
   });
@@ -50,8 +51,8 @@ describe('indexing policy', () => {
     } finally { db.close(); }
   }
 
-  it.each(['view.base', 'config.yaml', 'readme.txt', 'UPPER.MD', '.hidden.md', '.obsidian/note.md'])
-    ('skips %s on direct writes without creating a database or loading embeddings', async relative => {
+  it.each(['view.base', 'config.yaml', 'readme.txt', 'UPPER.MD', '.hidden.md', '.obsidian/note.md'])(
+    'skips %s on direct writes without creating a database or loading embeddings', async relative => {
       await write(relative);
       expect(await indexer.indexFile(vault, relative, tmp, 'policy')).toMatchObject({ success: true, chunks: 0 });
       expect(Embedder.getInstance).not.toHaveBeenCalled();
@@ -123,5 +124,93 @@ describe('indexing policy', () => {
     expect((await indexer.moveFile(vault, source, dest, tmp, 'policy')).success).toBe(true);
     expect((await rows()).map(r => r.path)).toEqual(expected);
     expect(Object.keys(JSON.parse(await fs.readFile(path.join(store, 'file-hashes.json'), 'utf8')))).toEqual(expected);
+  });
+
+  it('keeps FTS, vector, and hybrid search fresh across a batch without per-note maintenance', async () => {
+    await write('note.md', 'Obsoleteuniquemarker records old information that must disappear after replacing the contents of this note.');
+    await indexer.indexVault(vault, true, tmp, 'policy');
+    const db = await lancedb.connect(path.join(store, 'lancedb'));
+    const table = await db.openTable('notes');
+    const optimize = vi.spyOn(Object.getPrototypeOf(table), 'optimize');
+    try {
+      for (let i = 0; i < 20; i++) {
+        await write('note.md', `Freshuniquemarker edit ${i} holds the current knowledge for this note and must be searchable immediately.`);
+        expect((await indexer.indexFile(vault, 'note.md', tmp, 'policy')).success).toBe(true);
+      }
+      expect(optimize).not.toHaveBeenCalled();
+      await fs.rename(path.join(vault, 'note.md'), path.join(vault, 'moved.md'));
+      expect((await indexer.moveFile(vault, 'note.md', 'moved.md', tmp, 'policy')).success).toBe(true);
+      expect(optimize).not.toHaveBeenCalled();
+      const latest = await db.openTable('notes');
+      try {
+        expect((await latest.search('Freshuniquemarker', 'fts').toArray()).map(r => r.path)).toEqual(['moved.md']);
+        expect(await latest.search('Obsoleteuniquemarker', 'fts').toArray()).toHaveLength(0);
+        expect((await latest.vectorSearch(new Array(384).fill(0.1)).toArray()).map(r => r.path)).toEqual(['moved.md']);
+        const errors = vi.spyOn(console, 'error');
+        expect((await indexer.search('Freshuniquemarker', vault, 5, tmp, 'policy')).map(r => r.path)).toEqual(['moved.md']);
+        expect(errors.mock.calls.some(args => String(args[0]).includes('falling back to vector'))).toBe(false);
+      } finally { latest.close(); }
+      expect((await indexer.indexVault(vault, false, tmp, 'policy')).chunks).toBe(0);
+      expect(optimize).not.toHaveBeenCalled();
+      expect(await indexer.indexVault(vault, false, tmp, 'policy', true)).toMatchObject({ success: true, chunks: 0, maintenancePerformed: true });
+      expect(optimize).toHaveBeenCalledTimes(1);
+      const options = optimize.mock.calls[0][0];
+      expect(options.deleteUnverified).toBe(false);
+      expect(Date.now() - options.cleanupOlderThan.getTime()).toBeGreaterThanOrEqual(7 * 86400000);
+      await fs.unlink(path.join(vault, 'moved.md'));
+      expect((await indexer.indexVault(vault, false, tmp, 'policy')).success).toBe(true);
+      expect(optimize).toHaveBeenCalledTimes(2);
+      expect(await rows()).toHaveLength(0);
+      await indexer.indexVault(vault, false, tmp, 'policy');
+      expect(optimize).toHaveBeenCalledTimes(2);
+    } finally { table.close(); db.close(); }
+  });
+
+  it('runs explicit maintenance on an empty index and skips unchanged automatic scans', async () => {
+    expect(await indexer.indexVault(vault, false, tmp, 'policy', true)).toMatchObject({ success: true, maintenancePerformed: true });
+    const db = await lancedb.connect(path.join(store, 'lancedb'));
+    const table = await db.openTable('notes');
+    const optimize = vi.spyOn(Object.getPrototypeOf(table), 'optimize');
+    try {
+      await indexer.indexVault(vault, false, tmp, 'policy');
+      expect(optimize).not.toHaveBeenCalled();
+      await indexer.indexVault(vault, false, tmp, 'policy', true);
+      expect(optimize).toHaveBeenCalledTimes(1);
+    } finally { table.close(); db.close(); }
+  });
+
+  it('reports maintenance failure and releases the lock for a retry', async () => {
+    await write('note.md');
+    await indexer.indexVault(vault, true, tmp, 'policy');
+    const db = await lancedb.connect(path.join(store, 'lancedb'));
+    const table = await db.openTable('notes');
+    const optimize = vi.spyOn(Object.getPrototypeOf(table), 'optimize').mockRejectedValueOnce(new Error('maintenance failed'));
+    try {
+      await expect(indexer.indexVault(vault, false, tmp, 'policy', true)).rejects.toThrow('maintenance failed');
+      await expect(fs.stat(path.join(store, 'index.lock'))).rejects.toThrow();
+      expect((await indexer.indexVault(vault, false, tmp, 'policy', true)).success).toBe(true);
+      expect(optimize).toHaveBeenCalledTimes(2);
+    } finally { table.close(); db.close(); }
+  });
+
+  it('waits for the existing vault lock before explicit maintenance', async () => {
+    await write('note.md');
+    await indexer.indexVault(vault, true, tmp, 'policy');
+    const lock = JSON.stringify({ pid: process.pid, createdAt: Date.now(), token: 'other-writer' });
+    await fs.writeFile(path.join(store, 'index.lock'), lock);
+    vi.stubEnv('OBSIDIAN_INDEX_LOCK_WAIT_MS', '20');
+    vi.stubEnv('OBSIDIAN_INDEX_LOCK_RETRY_MS', '5');
+    await expect(indexer.indexVault(vault, false, tmp, 'policy', true)).rejects.toThrow('Timed out waiting');
+    expect(await fs.readFile(path.join(store, 'index.lock'), 'utf8')).toBe(lock);
+  });
+
+  it('makes the first note searchable through FTS without a preceding vault scan', async () => {
+    await write('note.md');
+    expect((await indexer.indexFile(vault, 'note.md', tmp, 'policy')).success).toBe(true);
+    const db = await lancedb.connect(path.join(store, 'lancedb'));
+    const table = await db.openTable('notes');
+    try {
+      expect((await table.search('Pineapplemarker', 'fts').toArray()).map(row => row.path)).toEqual(['note.md']);
+    } finally { table.close(); db.close(); }
   });
 });

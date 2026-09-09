@@ -1,0 +1,57 @@
+{
+  "label": "fixed-real",
+  "embeddings": "Xenova/all-MiniLM-L6-v2",
+  "notes": 200,
+  "edits": 60,
+  "moves": 6,
+  "initialIndexMs": 3573.702154,
+  "before": {
+    "retainedBytes": 776888,
+    "dataFiles": 1,
+    "tableVersions": 4,
+    "rows": 200,
+    "optimizeCalls": 0
+  },
+  "afterEdits": {
+    "retainedBytes": 1752555,
+    "dataFiles": 67,
+    "tableVersions": 136,
+    "rows": 200,
+    "optimizeCalls": 0
+  },
+  "afterMaintenance": {
+    "retainedBytes": 2536210,
+    "dataFiles": 69,
+    "tableVersions": 139,
+    "rows": 200,
+    "optimizeCalls": 1
+  },
+  "writes": {
+    "count": 60,
+    "medianMs": 27.454,
+    "p95Ms": 37.934
+  },
+  "movesLatency": {
+    "count": 6,
+    "medianMs": 26.877,
+    "p95Ms": 33.913
+  },
+  "maintenanceMs": 51.47140800000034,
+  "query": {
+    "before": {
+      "count": 10,
+      "medianMs": 8.312,
+      "p95Ms": 16.931
+    },
+    "afterEdits": {
+      "count": 10,
+      "medianMs": 11.352,
+      "p95Ms": 12.535
+    },
+    "afterMaintenance": {
+      "count": 10,
+      "medianMs": 6.991,
+      "p95Ms": 7.929
+    }
+  }
+}

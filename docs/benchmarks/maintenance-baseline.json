@@ -1,0 +1,57 @@
+{
+  "label": "baseline",
+  "embeddings": "deterministic SHA-256 vectors",
+  "notes": 200,
+  "edits": 60,
+  "moves": 6,
+  "initialIndexMs": 119.46158699999998,
+  "before": {
+    "retainedBytes": 776885,
+    "dataFiles": 1,
+    "tableVersions": 4,
+    "rows": 200,
+    "optimizeCalls": 0
+  },
+  "afterEdits": {
+    "retainedBytes": 62516277,
+    "dataFiles": 126,
+    "tableVersions": 320,
+    "rows": 200,
+    "optimizeCalls": 66
+  },
+  "afterMaintenance": {
+    "retainedBytes": 63764658,
+    "dataFiles": 127,
+    "tableVersions": 323,
+    "rows": 200,
+    "optimizeCalls": 67
+  },
+  "writes": {
+    "count": 60,
+    "medianMs": 145.422,
+    "p95Ms": 400.063
+  },
+  "movesLatency": {
+    "count": 6,
+    "medianMs": 56.533,
+    "p95Ms": 258.145
+  },
+  "maintenanceMs": 322.63119499999993,
+  "query": {
+    "before": {
+      "count": 10,
+      "medianMs": 4.061,
+      "p95Ms": 11.075
+    },
+    "afterEdits": {
+      "count": 10,
+      "medianMs": 4.279,
+      "p95Ms": 13.793
+    },
+    "afterMaintenance": {
+      "count": 10,
+      "medianMs": 4.293,
+      "p95Ms": 13.947
+    }
+  }
+}

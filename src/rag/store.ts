@@ -43,6 +43,7 @@ export interface IndexResult {
   success: boolean;
   chunks?: number;
   message?: string;
+  maintenancePerformed?: boolean;
 }
 
 export interface IndexStaleness {
@@ -74,6 +75,7 @@ const SCHEMA_VERSION_FILE_NAME = 'schema-version.json';
 const NOTES_TABLE_NAME = 'notes';
 const NOTES_TABLE_SCHEMA_VERSION = 3;
 const EMBEDDING_DIMENSIONS = 384;
+const INDEX_RETENTION_DAYS = 7;
 const FULL_REINDEX_REQUIRED_MESSAGE =
   'RAG index schema version changed. Run obsidian_rag_index with force_reindex=true to rebuild the local index.';
 // Query results carry the clean text plus filterable metadata; embedding_text
@@ -718,7 +720,6 @@ export class VaultIndexer {
       const result = await this.indexNoteIntoTable(table, embedder, vaultPath, normalizedPath);
       if (!result.success) return result;
 
-      await table.optimize();
       if (result.chunks && result.chunks > 0) {
         hashes[normalizedPath] = result.contentHash!;
         console.error(`Indexed ${result.chunks} chunks for ${relativePath}.`);
@@ -739,7 +740,15 @@ export class VaultIndexer {
     }
   }
 
-  public async indexVault(vaultPath: string, force: boolean = false, workspacePath?: string | null, vaultId?: string | null): Promise<IndexResult> {
+  // Call only while holding the in-process and per-vault index locks.
+  private async maintainTable(table: lancedb.Table): Promise<void> {
+    await table.optimize({
+      cleanupOlderThan: new Date(Date.now() - INDEX_RETENTION_DAYS * 86400000),
+      deleteUnverified: false,
+    });
+  }
+
+  public async indexVault(vaultPath: string, force: boolean = false, workspacePath?: string | null, vaultId?: string | null, maintenance: boolean = false): Promise<IndexResult> {
     const release = await this.acquireLock();
     let releaseIndexLock: (() => Promise<void>) | null = null;
     try {
@@ -759,19 +768,22 @@ export class VaultIndexer {
 
       // Load previous file hashes for incremental indexing
       let previousHashes: Record<string, string> = {};
+      let hasHashFile = false;
       if (!force) {
         try {
           previousHashes = JSON.parse(await fs.readFile(hashPath, 'utf-8'));
+          hasHashFile = true;
         } catch { /* no previous hashes — will do full index */ }
       }
 
       const tableNames = await db.tableNames();
       const tableExists = tableNames.includes(NOTES_TABLE_NAME);
-      const hasPreviousHashes = Object.keys(previousHashes).length > 0;
       if (tableExists && !force && await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
         return this.fullReindexRequiredResult();
       }
-      const canIncremental = tableExists && hasPreviousHashes && !force;
+      // An empty hash map is valid for an empty vault. Rebuilding it on every
+      // session start would also run unnecessary maintenance each time.
+      const canIncremental = tableExists && hasHashFile && !force;
       const currentHashes: Record<string, string> = canIncremental ? { ...previousHashes } : {};
 
       // Determine deleted files (in previous hashes but not in current file set)
@@ -985,12 +997,13 @@ export class VaultIndexer {
 
       if (canIncremental && changedPaths.length === 0 && deletedPaths.length === 0 && failedFiles === 0) {
         console.error('Index is up to date, no changes detected.');
+        if (maintenance) await this.maintainTable(table);
         await this.writeJsonAtomic(hashPath, currentHashes);
         await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
-        return { success: true, chunks: 0, message: 'Index up to date, no changes detected.' };
+        return { success: true, chunks: 0, message: maintenance ? 'Index up to date. Maintenance completed.' : 'Index up to date, no changes detected.', maintenancePerformed: maintenance };
       }
 
-      await table.optimize();
+      await this.maintainTable(table);
 
       // Always persist the hashes: they contain exactly the files that were
       // fully indexed, so failed files are retried on the next run instead of
@@ -1014,7 +1027,7 @@ export class VaultIndexer {
       } else {
         console.error(`Indexed ${indexedChunks} chunks.`);
       }
-      return { success: true, chunks: indexedChunks };
+      return { success: true, chunks: indexedChunks, maintenancePerformed: true };
     } finally {
       if (releaseIndexLock) {
         await releaseIndexLock();
@@ -1071,7 +1084,6 @@ export class VaultIndexer {
       const result = await this.indexNoteIntoTable(table, embedder, vaultPath, destPath, pathsToDelete);
       if (!result.success) return result;
 
-      await table.optimize();
       delete hashes[sourcePath];
       if (result.contentHash) {
         hashes[destPath] = result.contentHash;

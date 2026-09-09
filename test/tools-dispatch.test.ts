@@ -96,6 +96,30 @@ describe('tool registry dispatch', () => {
     });
   });
 
+  it('dispatches explicit maintenance from CLI and MCP, including an unchanged index', async () => {
+    const { context, indexer, vaultPath } = await createFakeContext();
+    vi.mocked(indexer.indexVault).mockResolvedValue({ success: true, chunks: 0, maintenancePerformed: true });
+    const cli = await dispatchCliTool(['obsidian_rag_index', '--maintenance', 'true'], context);
+    expect(cli.exitCode).toBe(0);
+    expect(JSON.parse(cli.output!)).toMatchObject({ maintenancePerformed: true });
+    expect(indexer.indexVault).toHaveBeenCalledWith(vaultPath, false, null, null, true);
+    const mcp = await dispatchMcpTool('obsidian_rag_index', { maintenance: true }, context);
+    expect(mcp.isError).not.toBe(true);
+    expect(JSON.parse(mcp.content[0].text)).toMatchObject({ maintenancePerformed: true });
+    expect(indexer.indexVault).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects maintenance with a single file before indexing', async () => {
+    const { context, indexer } = await createFakeContext();
+    await expect(dispatchMcpTool('obsidian_rag_index', { maintenance: true, file_path: 'note.md' }, context))
+      .rejects.toThrow('maintenance cannot be combined with file_path');
+    const cli = await dispatchCliTool(['obsidian_rag_index', '--maintenance', 'true', '--file_path', 'note.md'], context);
+    expect(cli.exitCode).toBe(1);
+    expect(cli.output).toContain('maintenance cannot be combined with file_path');
+    expect(indexer.indexVault).not.toHaveBeenCalled();
+    expect(indexer.indexFile).not.toHaveBeenCalled();
+  });
+
   it('caps filename search matches at 20 results', async () => {
     const { context, vaultPath } = await createFakeContext();
     for (let i = 0; i < 25; i++) {
@@ -194,7 +218,7 @@ describe('tool registry dispatch', () => {
       exitCode: 0,
       output: JSON.stringify({ success: true, chunks: 2 }),
     });
-    expect(indexer.indexVault).toHaveBeenCalledWith(vaultPath, true, null, null);
+    expect(indexer.indexVault).toHaveBeenCalledWith(vaultPath, true, null, null, false);
   });
 
   it('parses the legacy CLI --force boolean alias', async () => {
@@ -205,7 +229,7 @@ describe('tool registry dispatch', () => {
       async () => '',
     );
 
-    expect(indexer.indexVault).toHaveBeenCalledWith(vaultPath, true, null, null);
+    expect(indexer.indexVault).toHaveBeenCalledWith(vaultPath, true, null, null, false);
   });
 
   it('keeps the obsidian_rag_index --hook stdin mode', async () => {
@@ -302,7 +326,7 @@ describe('tool registry dispatch', () => {
       context,
     );
 
-    expect(indexer.indexVault).toHaveBeenCalledWith(altVaultPath, true, workspacePath, null);
+    expect(indexer.indexVault).toHaveBeenCalledWith(altVaultPath, true, workspacePath, null, false);
   });
 
   it('resolves symlinks before enforcing boundaries', async () => {
