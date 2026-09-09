@@ -7420,7 +7420,7 @@ var require_parse = __commonJS({
 var require_gray_matter = __commonJS({
   "node_modules/gray-matter/index.js"(exports2, module2) {
     "use strict";
-    var fs9 = require("fs");
+    var fs10 = require("fs");
     var sections = require_section_matter();
     var defaults = require_defaults();
     var stringify = require_stringify();
@@ -7504,7 +7504,7 @@ var require_gray_matter = __commonJS({
       return stringify(file2, data, options2);
     };
     matter3.read = function(filepath, options2) {
-      const str2 = fs9.readFileSync(filepath, "utf8");
+      const str2 = fs10.readFileSync(filepath, "utf8");
       const file2 = matter3(str2, options2);
       file2.path = filepath;
       return file2;
@@ -32161,12 +32161,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs9, exportName) {
+    function addFormats(ajv, list, fs10, exportName) {
       var _a2;
       var _b;
       (_a2 = (_b = ajv.opts.code).formats) !== null && _a2 !== void 0 ? _a2 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs9[f]);
+        ajv.addFormat(f, fs10[f]);
     }
     module2.exports = exports2 = formatsPlugin;
     Object.defineProperty(exports2, "__esModule", { value: true });
@@ -33453,7 +33453,10 @@ var init_chunking = __esm({
 });
 
 // src/rag/local-manifest.ts
-async function assertLocalManifest(file2) {
+async function assertLocalManifest(file2, engineVersion) {
+  if (engineVersion !== "0.27.2") {
+    throw new Error(`Snapshot manifest validation requires LanceDB 0.27.2; installed version is ${engineVersion}. Use the supported dependency version before preparing a snapshot.`);
+  }
   const data = await fs5.readFile(file2);
   const invalid = () => new Error(`Unsupported or corrupt Lance manifest: ${file2}. Snapshot preparation supports ordinary local indexes only.`);
   if (data.length < 20 || data.subarray(-4).toString() !== "LANC" || data.readUInt16LE(data.length - 8) !== 0 || data.readUInt16LE(data.length - 6) !== 2) {
@@ -33637,11 +33640,18 @@ async function prepareSnapshot(basePath, expectedSchema, schemaVersion, assertFr
       if (parts.length !== 4 || !parts[3].endsWith(".manifest")) {
         throw new Error(`Unsupported Lance version file: ${file2.path}`);
       }
-      await assertLocalManifest(path4.join(basePath, file2.path));
+      await assertLocalManifest(path4.join(basePath, file2.path), ENGINE_VERSION);
     }
   }
   const hashes = await readMetadata(basePath, schemaVersion);
   await assertFresh(hashes);
+  if (await exists(snapshotRoot)) {
+    for (const entry of await fs6.readdir(snapshotRoot, { withFileTypes: true })) {
+      if (entry.isDirectory() && /^\.preparing-[a-zA-Z0-9]{6}$/.test(entry.name)) {
+        await fs6.rm(path4.join(snapshotRoot, entry.name), { recursive: true, force: true });
+      }
+    }
+  }
   const sourceFingerprint = digest(JSON.stringify({ policy: POLICY_VERSION, engine: ENGINE_VERSION, files: sourceFiles }));
   const snapshotPath = path4.join(snapshotRoot, sourceFingerprint);
   if (await exists(snapshotPath)) {
@@ -33737,6 +33747,33 @@ var init_snapshot = __esm({
   }
 });
 
+// src/rag/process-identity.ts
+async function getProcessStartIdentity(pid) {
+  if (process.platform !== "linux" || !Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    const [stat3, bootId] = await Promise.all([
+      fs7.readFile(`/proc/${pid}/stat`, "utf8"),
+      fs7.readFile("/proc/sys/kernel/random/boot_id", "utf8")
+    ]);
+    const commandEnd = stat3.lastIndexOf(")");
+    if (commandEnd < 0) return null;
+    const fields = stat3.slice(commandEnd + 1).trim().split(/\s+/);
+    const startTime = fields[19];
+    const boot = bootId.trim();
+    if (!/^\d+$/.test(startTime ?? "") || !/^[0-9a-f-]{36}$/.test(boot)) return null;
+    return `linux:${boot}:${startTime}`;
+  } catch {
+    return null;
+  }
+}
+var fs7;
+var init_process_identity = __esm({
+  "src/rag/process-identity.ts"() {
+    "use strict";
+    fs7 = __toESM(require("node:fs/promises"));
+  }
+});
+
 // src/rag/store.ts
 var store_exports = {};
 __export(store_exports, {
@@ -33770,12 +33807,12 @@ function isIndexableNotePath(relativePath) {
   const normalized = path5.posix.normalize(relativePath.replace(/\\/g, "/"));
   return normalized.endsWith(".md") && !normalized.split("/").some((segment) => segment.startsWith("."));
 }
-var lancedb2, fs7, path5, os2, crypto, import_apache_arrow, import_gray_matter2, import_md52, STORAGE_DIR_NAME, LEGACY_STORAGE_DIR_NAME, INDEX_LOCK_FILE_NAME, INDEX_METADATA_FILE_NAME, SCHEMA_VERSION_FILE_NAME, NOTES_TABLE_NAME, NOTES_TABLE_SCHEMA_VERSION, EMBEDDING_DIMENSIONS, INDEX_RETENTION_DAYS, FULL_REINDEX_REQUIRED_MESSAGE, SEARCH_RESULT_COLUMNS, NOTES_TABLE_SCHEMA, VaultIndexer;
+var lancedb2, fs8, path5, os2, crypto, import_apache_arrow, import_gray_matter2, import_md52, STORAGE_DIR_NAME, LEGACY_STORAGE_DIR_NAME, INDEX_LOCK_FILE_NAME, INDEX_METADATA_FILE_NAME, SCHEMA_VERSION_FILE_NAME, NOTES_TABLE_NAME, NOTES_TABLE_SCHEMA_VERSION, EMBEDDING_DIMENSIONS, INDEX_RETENTION_DAYS, FULL_REINDEX_REQUIRED_MESSAGE, SEARCH_RESULT_COLUMNS, NOTES_TABLE_SCHEMA, VaultIndexer;
 var init_store = __esm({
   "src/rag/store.ts"() {
     "use strict";
     lancedb2 = __toESM(require("@lancedb/lancedb"));
-    fs7 = __toESM(require("fs/promises"));
+    fs8 = __toESM(require("fs/promises"));
     path5 = __toESM(require("path"));
     os2 = __toESM(require("os"));
     crypto = __toESM(require("crypto"));
@@ -33787,6 +33824,7 @@ var init_store = __esm({
     init_chunking();
     init_utils();
     init_snapshot();
+    init_process_identity();
     STORAGE_DIR_NAME = ".obsidian-vault-mcp";
     LEGACY_STORAGE_DIR_NAME = ".gemini-obsidian";
     INDEX_LOCK_FILE_NAME = "index.lock";
@@ -33888,21 +33926,21 @@ var init_store = __esm({
         const metadataPath = path5.join(baseStorePath, INDEX_METADATA_FILE_NAME);
         const schemaVersionPath = path5.join(baseStorePath, SCHEMA_VERSION_FILE_NAME);
         getSafeFilePath(storageParent, path5.relative(storageParent, baseStorePath));
-        await fs7.mkdir(baseStorePath, { recursive: true });
+        await fs8.mkdir(baseStorePath, { recursive: true });
         return { dbPath, hashPath, lockPath, metadataPath, schemaVersionPath };
       }
       async getStorageRoot(storageParent) {
         const newRoot = path5.join(storageParent, STORAGE_DIR_NAME);
         const oldRoot = path5.join(storageParent, LEGACY_STORAGE_DIR_NAME);
         const [newExists, oldExists] = await Promise.all([
-          fs7.stat(newRoot).then(() => true).catch(() => false),
-          fs7.stat(oldRoot).then(() => true).catch(() => false)
+          fs8.stat(newRoot).then(() => true).catch(() => false),
+          fs8.stat(oldRoot).then(() => true).catch(() => false)
         ]);
         if (!newExists && oldExists) {
           try {
-            await fs7.rename(oldRoot, newRoot);
+            await fs8.rename(oldRoot, newRoot);
           } catch (error2) {
-            const migrated = await fs7.stat(newRoot).then(() => true).catch(() => false);
+            const migrated = await fs8.stat(newRoot).then(() => true).catch(() => false);
             if (!migrated) throw error2;
           }
         }
@@ -33947,8 +33985,8 @@ var init_store = __esm({
       }
       async writeJsonAtomic(filePath, value) {
         const tmpPath = `${filePath}.tmp`;
-        await fs7.writeFile(tmpPath, JSON.stringify(value), "utf-8");
-        await fs7.rename(tmpPath, filePath);
+        await fs8.writeFile(tmpPath, JSON.stringify(value), "utf-8");
+        await fs8.rename(tmpPath, filePath);
       }
       notesTableToArrow(chunks) {
         return lancedb2.makeArrowTable(chunks, {
@@ -34007,7 +34045,7 @@ var init_store = __esm({
       }
       async readNotesSchemaVersion(schemaVersionPath) {
         try {
-          const metadata = JSON.parse(await fs7.readFile(schemaVersionPath, "utf-8"));
+          const metadata = JSON.parse(await fs8.readFile(schemaVersionPath, "utf-8"));
           return typeof metadata.notesTableSchemaVersion === "number" ? metadata.notesTableSchemaVersion : null;
         } catch {
           return null;
@@ -34047,7 +34085,7 @@ var init_store = __esm({
       // adds no signal to a count/mtime heuristic, and both sides of the
       // staleness comparison must count the same set of files.
       async getVaultIndexSnapshotForFiles(files) {
-        const stats = await Promise.all(files.map((filePath) => fs7.stat(filePath).catch(() => null)));
+        const stats = await Promise.all(files.map((filePath) => fs8.stat(filePath).catch(() => null)));
         const latestMtimeMs = stats.reduce((latest, stat3) => {
           if (!stat3) return latest;
           return Math.max(latest, stat3.mtimeMs);
@@ -34062,7 +34100,7 @@ var init_store = __esm({
       }
       async readIndexMetadata(metadataPath) {
         try {
-          const metadata = JSON.parse(await fs7.readFile(metadataPath, "utf-8"));
+          const metadata = JSON.parse(await fs8.readFile(metadataPath, "utf-8"));
           if (typeof metadata.fileCount !== "number" || typeof metadata.latestMtimeMs !== "number") {
             return null;
           }
@@ -34089,7 +34127,7 @@ var init_store = __esm({
         if (!previous) return;
         const [files, fileStat] = await Promise.all([
           this.listMarkdownFiles(vaultPath),
-          absoluteFilePath ? fs7.stat(absoluteFilePath).catch(() => null) : null
+          absoluteFilePath ? fs8.stat(absoluteFilePath).catch(() => null) : null
         ]);
         await this.writeIndexMetadata(metadataPath, {
           fileCount: files.length,
@@ -34106,7 +34144,7 @@ var init_store = __esm({
       }
       async readIndexLockRaw(lockPath) {
         try {
-          return await fs7.readFile(lockPath, "utf-8");
+          return await fs8.readFile(lockPath, "utf-8");
         } catch {
           return null;
         }
@@ -34121,7 +34159,7 @@ var init_store = __esm({
         }
       }
       async isIndexLockStale(lockPath, raw, staleMs) {
-        const stat3 = await fs7.stat(lockPath).catch(() => null);
+        const stat3 = await fs8.stat(lockPath).catch(() => null);
         if (!stat3) return false;
         const now = Date.now();
         const info = this.parseIndexLock(raw);
@@ -34130,7 +34168,14 @@ var init_store = __esm({
         }
         const createdAt = Number.isFinite(info.createdAt) ? Number(info.createdAt) : stat3.mtimeMs;
         const sameHost = !info.hostname || info.hostname === os2.hostname();
-        if (sameHost && typeof info.pid === "number") return !this.isPidRunning(info.pid);
+        if (sameHost && typeof info.pid === "number") {
+          if (!this.isPidRunning(info.pid)) return true;
+          if (typeof info.processStartIdentity === "string") {
+            const currentIdentity = await getProcessStartIdentity(info.pid);
+            if (currentIdentity !== null) return currentIdentity !== info.processStartIdentity;
+          }
+          return false;
+        }
         if (!sameHost) return false;
         return now - createdAt > staleMs;
       }
@@ -34144,11 +34189,12 @@ var init_store = __esm({
           pid: process.pid,
           createdAt: startedAt,
           token,
-          hostname: os2.hostname()
+          hostname: os2.hostname(),
+          processStartIdentity: await getProcessStartIdentity(process.pid) ?? void 0
         };
         while (true) {
           try {
-            const handle = await fs7.open(lockPath, "wx");
+            const handle = await fs8.open(lockPath, "wx");
             try {
               await handle.writeFile(JSON.stringify(lockInfo), "utf-8");
             } finally {
@@ -34160,7 +34206,7 @@ var init_store = __esm({
               released = true;
               const current = this.parseIndexLock(await this.readIndexLockRaw(lockPath));
               if (current?.token === token) {
-                await fs7.rm(lockPath, { force: true });
+                await fs8.rm(lockPath, { force: true });
               }
             };
           } catch (error2) {
@@ -34172,7 +34218,7 @@ var init_store = __esm({
             if (await this.isIndexLockStale(lockPath, observedRaw, staleMs)) {
               const currentRaw = await this.readIndexLockRaw(lockPath);
               if (currentRaw === observedRaw) {
-                await fs7.rm(lockPath, { force: true });
+                await fs8.rm(lockPath, { force: true });
               }
               continue;
             }
@@ -34233,7 +34279,7 @@ var init_store = __esm({
       async indexNoteIntoTable(table, embedder, vaultPath, relativePath, pathsToDelete) {
         const normalizedPath = this.validatePath(relativePath);
         const filePath = getSafeFilePath(vaultPath, normalizedPath);
-        const content = await fs7.readFile(filePath, "utf-8");
+        const content = await fs8.readFile(filePath, "utf-8");
         const { contentHash, textsToEmbed, chunkMetadata } = this.prepareNoteChunks(normalizedPath, content);
         const deleteTargets = pathsToDelete ?? [normalizedPath];
         if (textsToEmbed.length === 0) {
@@ -34264,7 +34310,7 @@ var init_store = __esm({
       // creating a database or loading the embedding model.
       async removeExcludedPaths(vaultPath, paths, workspacePath, vaultId) {
         const { dbPath, hashPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
-        const exists2 = await fs7.stat(dbPath).then(() => true).catch((error2) => {
+        const exists2 = await fs8.stat(dbPath).then(() => true).catch((error2) => {
           if (error2.code === "ENOENT") return false;
           throw error2;
         });
@@ -34282,7 +34328,7 @@ var init_store = __esm({
         }
         let hashes;
         try {
-          hashes = JSON.parse(await fs7.readFile(hashPath, "utf8"));
+          hashes = JSON.parse(await fs8.readFile(hashPath, "utf8"));
         } catch (error2) {
           if (error2.code === "ENOENT") {
             return { success: true, chunks: 0, message: "File excluded from the markdown index." };
@@ -34312,7 +34358,7 @@ var init_store = __esm({
           }
           let hashes = {};
           try {
-            hashes = JSON.parse(await fs7.readFile(hashPath, "utf-8"));
+            hashes = JSON.parse(await fs8.readFile(hashPath, "utf-8"));
           } catch {
           }
           const table = tableNames.includes(NOTES_TABLE_NAME) ? await db.openTable(NOTES_TABLE_NAME) : await this.createNotesTable(db);
@@ -34362,7 +34408,7 @@ var init_store = __esm({
           let hasHashFile = false;
           if (!force) {
             try {
-              previousHashes = JSON.parse(await fs7.readFile(hashPath, "utf-8"));
+              previousHashes = JSON.parse(await fs8.readFile(hashPath, "utf-8"));
               hasHashFile = true;
             } catch {
             }
@@ -34424,7 +34470,7 @@ var init_store = __esm({
             const results = await Promise.all(
               batch.map(async (filePath) => {
                 try {
-                  const content = await fs7.readFile(filePath, "utf-8");
+                  const content = await fs8.readFile(filePath, "utf-8");
                   const relativePath = this.validatePath(path5.relative(vaultPath, filePath).replace(/\\/g, "/"));
                   const contentHash = (0, import_md52.default)(content);
                   if (canIncremental && previousHashes[relativePath] === contentHash) {
@@ -34598,7 +34644,7 @@ var init_store = __esm({
           }
           let hashes = {};
           try {
-            hashes = JSON.parse(await fs7.readFile(hashPath, "utf-8"));
+            hashes = JSON.parse(await fs8.readFile(hashPath, "utf-8"));
           } catch {
           }
           const table = tableNames.includes(NOTES_TABLE_NAME) ? await db.openTable(NOTES_TABLE_NAME) : await this.createNotesTable(db);
@@ -34662,7 +34708,7 @@ var init_store = __esm({
             }
             for (const file2 of files) {
               const relative4 = path5.relative(vaultPath, file2).replace(/\\/g, "/");
-              const content = await fs7.readFile(getSafeFilePath(vaultPath, relative4), "utf8");
+              const content = await fs8.readFile(getSafeFilePath(vaultPath, relative4), "utf8");
               if (hashes[relative4] !== (0, import_md52.default)(content)) {
                 throw new Error(`Index is stale: ${relative4} changed. Run obsidian_rag_index before preparing a snapshot.`);
               }
@@ -34720,7 +34766,7 @@ __export(index_exports, {
   main: () => main
 });
 module.exports = __toCommonJS(index_exports);
-var fs8 = __toESM(require("fs/promises"));
+var fs9 = __toESM(require("fs/promises"));
 var path6 = __toESM(require("path"));
 var os3 = __toESM(require("os"));
 
@@ -35884,7 +35930,7 @@ async function saveConfig(options2) {
     });
     await Promise.all(
       CONFIG_PATHS.map(
-        (configPath) => fs8.writeFile(configPath, serialized, "utf-8")
+        (configPath) => fs9.writeFile(configPath, serialized, "utf-8")
       )
     );
   } catch (error2) {
@@ -35894,7 +35940,7 @@ async function saveConfig(options2) {
 async function loadConfig() {
   for (const configPath of [...CONFIG_PATHS, ...LEGACY_CONFIG_PATHS]) {
     try {
-      const data = await fs8.readFile(configPath, "utf-8");
+      const data = await fs9.readFile(configPath, "utf-8");
       const config2 = JSON.parse(data);
       return {
         vault_path: config2.vault_path || null,
@@ -35914,7 +35960,7 @@ async function loadConfig() {
 async function loadPackageMetadata() {
   const packageJsonPath = path6.join(__dirname, "..", "package.json");
   try {
-    const data = await fs8.readFile(packageJsonPath, "utf-8");
+    const data = await fs9.readFile(packageJsonPath, "utf-8");
     const packageJson = JSON.parse(data);
     return {
       name: String(packageJson.name || PROJECT_NAME),

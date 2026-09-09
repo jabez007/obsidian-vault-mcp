@@ -11,6 +11,7 @@ import { Embedder } from './embedder.js';
 import { buildEmbeddingInputs, ChunkingOptions, normalizeToStringArray, NoteMetadata } from './chunking.js';
 import { getSafeFilePath } from '../utils.js';
 import { prepareSnapshot, SnapshotResult } from './snapshot.js';
+import { getProcessStartIdentity } from './process-identity.js';
 
 function getFirstNumericEnv(keys: string[], fallback: number): number {
   for (const key of keys) {
@@ -62,6 +63,7 @@ interface IndexLockInfo {
   createdAt?: number;
   token?: string;
   hostname?: string;
+  processStartIdentity?: string;
 }
 
 interface IndexMetadata {
@@ -505,7 +507,14 @@ export class VaultIndexer {
     // nothing about a local process; only trust liveness for locks created
     // on this host. Age is only a fallback for legacy locks without a PID.
     const sameHost = !info.hostname || info.hostname === os.hostname();
-    if (sameHost && typeof info.pid === 'number') return !this.isPidRunning(info.pid);
+    if (sameHost && typeof info.pid === 'number') {
+      if (!this.isPidRunning(info.pid)) return true;
+      if (typeof info.processStartIdentity === 'string') {
+        const currentIdentity = await getProcessStartIdentity(info.pid);
+        if (currentIdentity !== null) return currentIdentity !== info.processStartIdentity;
+      }
+      return false;
+    }
     // Never steal a remote host's lock: age cannot prove that its owner died.
     if (!sameHost) return false;
     return now - createdAt > staleMs;
@@ -522,6 +531,7 @@ export class VaultIndexer {
       createdAt: startedAt,
       token,
       hostname: os.hostname(),
+      processStartIdentity: await getProcessStartIdentity(process.pid) ?? undefined,
     };
 
     while (true) {

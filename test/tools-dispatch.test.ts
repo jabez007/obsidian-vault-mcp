@@ -100,7 +100,7 @@ describe('tool registry dispatch', () => {
   it('dispatches explicit maintenance from CLI and MCP, including an unchanged index', async () => {
     const { context, indexer, vaultPath } = await createFakeContext();
     vi.mocked(indexer.indexVault).mockResolvedValue({ success: true, chunks: 0, maintenancePerformed: true });
-    const cli = await dispatchCliTool(['obsidian_rag_index', '--maintenance', 'true'], context);
+    const cli = await dispatchCliTool(['obsidian_rag_index', '--maintenance', 'true'], context, async () => '');
     expect(cli.exitCode).toBe(0);
     expect(JSON.parse(cli.output!)).toMatchObject({ maintenancePerformed: true });
     expect(indexer.indexVault).toHaveBeenCalledWith(vaultPath, false, null, null, true);
@@ -114,7 +114,7 @@ describe('tool registry dispatch', () => {
     const { context, indexer } = await createFakeContext();
     await expect(dispatchMcpTool('obsidian_rag_index', { maintenance: true, file_path: 'note.md' }, context))
       .rejects.toThrow('maintenance cannot be combined with file_path');
-    const cli = await dispatchCliTool(['obsidian_rag_index', '--maintenance', 'true', '--file_path', 'note.md'], context);
+    const cli = await dispatchCliTool(['obsidian_rag_index', '--maintenance', 'true', '--file_path', 'note.md'], context, async () => '');
     expect(cli.exitCode).toBe(1);
     expect(cli.output).toContain('maintenance cannot be combined with file_path');
     expect(indexer.indexVault).not.toHaveBeenCalled();

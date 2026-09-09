@@ -6,7 +6,10 @@ import * as fs from 'node:fs/promises';
 // Format and field numbers: Lance 4.0.0, used by LanceDB 0.27.2:
 // https://github.com/lance-format/lance/blob/v4.0.0/protos/table.proto
 // https://github.com/lance-format/lance/blob/v4.0.0/rust/lance-table/src/io/manifest.rs
-export async function assertLocalManifest(file: string): Promise<void> {
+export async function assertLocalManifest(file: string, engineVersion: string): Promise<void> {
+  if (engineVersion !== '0.27.2') {
+    throw new Error(`Snapshot manifest validation requires LanceDB 0.27.2; installed version is ${engineVersion}. Use the supported dependency version before preparing a snapshot.`);
+  }
   const data = await fs.readFile(file);
   const invalid = () => new Error(`Unsupported or corrupt Lance manifest: ${file}. Snapshot preparation supports ordinary local indexes only.`);
   if (data.length < 20 || data.subarray(-4).toString() !== 'LANC' ||

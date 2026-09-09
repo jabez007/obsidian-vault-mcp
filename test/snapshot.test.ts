@@ -11,6 +11,8 @@ import { VaultIndexer, STORAGE_DIR_NAME } from '../src/rag/store';
 import { Embedder } from '../src/rag/embedder';
 import { createToolContext } from '../src/index';
 import { dispatchCliTool, dispatchMcpTool } from '../src/tools/dispatch';
+import * as processIdentity from '../src/rag/process-identity';
+import { assertLocalManifest } from '../src/rag/local-manifest';
 
 vi.mock('../src/rag/embedder', () => ({
   Embedder: { getInstance: vi.fn(() => ({
@@ -247,6 +249,58 @@ describe('index snapshots', () => {
     expect((await prepare()).success).toBe(true);
   });
 
+  it('cleans abandoned staging directories on reuse while preserving published exports and unrelated entries', async () => {
+    await seed();
+    const first = await prepare();
+    const before = await inventory(first.snapshotPath);
+    const root = path.dirname(first.snapshotPath);
+    const abandoned = path.join(root, '.preparing-dead01');
+    await fs.cp(first.snapshotPath, abandoned, { recursive: true });
+    const unrelated = path.join(root, 'keep');
+    await fs.mkdir(unrelated);
+    await fs.writeFile(path.join(unrelated, 'keep.txt'), 'keep');
+    await fs.writeFile(path.join(root, '.preparing-file01'), 'keep');
+    await fs.symlink(unrelated, path.join(root, '.preparing-link01'));
+    vi.stubEnv('OBSIDIAN_INDEX_LOCK_WAIT_MS', '0');
+    await fs.writeFile(path.join(store, 'index.lock'), JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
+    await expect(prepare()).rejects.toThrow('Timed out waiting');
+    expect((await fs.stat(abandoned)).isDirectory()).toBe(true);
+    await fs.unlink(path.join(store, 'index.lock'));
+    expect((await prepare()).reused).toBe(true);
+    await expect(fs.stat(abandoned)).rejects.toThrow();
+    expect(await inventory(first.snapshotPath)).toEqual(before);
+    expect(await fs.readFile(path.join(unrelated, 'keep.txt'), 'utf8')).toBe('keep');
+    expect(await fs.readFile(path.join(root, '.preparing-file01'), 'utf8')).toBe('keep');
+    expect((await fs.lstat(path.join(root, '.preparing-link01'))).isSymbolicLink()).toBe(true);
+  });
+
+  it.skipIf(process.platform !== 'linux')('reclaims a lock whose live PID now belongs to a different process start', async () => {
+    await seed();
+    vi.stubEnv('OBSIDIAN_INDEX_LOCK_WAIT_MS', '0');
+    const identity = await processIdentity.getProcessStartIdentity(process.pid);
+    expect(identity).toMatch(/^linux:/);
+    await fs.writeFile(path.join(store, 'index.lock'), JSON.stringify({
+      pid: process.pid, hostname: os.hostname(), createdAt: Date.now(),
+      processStartIdentity: identity!.replace(/\d+$/, ticks => String(BigInt(ticks) + 1n)),
+    }));
+    expect((await prepare()).success).toBe(true);
+  });
+
+  it('keeps a live lock when process start identity cannot be read', async () => {
+    await seed();
+    vi.stubEnv('OBSIDIAN_INDEX_LOCK_WAIT_MS', '0');
+    vi.spyOn(processIdentity, 'getProcessStartIdentity').mockResolvedValue(null);
+    const lock = { pid: process.pid, hostname: os.hostname(), createdAt: 1, processStartIdentity: 'unavailable' };
+    await fs.writeFile(path.join(store, 'index.lock'), JSON.stringify(lock));
+    await expect(prepare()).rejects.toThrow('Timed out waiting');
+    expect(JSON.parse(await fs.readFile(path.join(store, 'index.lock'), 'utf8'))).toEqual(lock);
+  });
+
+  it('refuses unsupported LanceDB releases before reading a manifest', async () => {
+    await expect(assertLocalManifest(path.join(tmp, 'missing.manifest'), '0.27.3'))
+      .rejects.toThrow('requires LanceDB 0.27.2; installed version is 0.27.3');
+  });
+
   it('rejects tags explicitly and preserves them in the live table', async () => {
     await seed();
     const db = await lancedb.connect(path.join(store, 'lancedb'));
@@ -386,6 +440,11 @@ describe('index snapshots', () => {
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('CLI capture timed out')), 10000); }),
       ]);
       expect(ready).toBe('capturing');
+      if (process.platform === 'linux') {
+        const lock = JSON.parse(await fs.readFile(path.join(store, 'index.lock'), 'utf8'));
+        expect(lock.processStartIdentity).toBe(await processIdentity.getProcessStartIdentity(child.pid!));
+        expect(lock.processStartIdentity).toMatch(/^linux:/);
+      }
       vi.stubEnv('OBSIDIAN_INDEX_LOCK_STALE_MS', '1');
       vi.stubEnv('OBSIDIAN_INDEX_LOCK_WAIT_MS', '30');
       await expect(indexer.indexVault(vault, false, tmp, 'snapshot')).rejects.toThrow('Timed out waiting');
@@ -402,6 +461,7 @@ describe('index snapshots', () => {
     const { stdout } = await promisify(execFile)(process.execPath, [cliPath, 'obsidian_prepare_index_snapshot'], { env });
     const result = JSON.parse(stdout);
     expect(result).toMatchObject({ success: true, reused: false, validation: { rows: 1 } });
+    await expect(fs.stat(path.join(store, 'snapshots', unfinished[0]))).rejects.toThrow();
     const context = createToolContext(indexer, { vault_path: vault, workspace_path: tmp, vault_id: 'snapshot' });
     const mcp = await dispatchMcpTool('obsidian_prepare_index_snapshot', {}, context);
     expect(JSON.parse(mcp.content[0].text)).toEqual({ ...result, reused: true });

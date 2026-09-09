@@ -184,11 +184,21 @@ export async function prepareSnapshot(
       if (parts.length !== 4 || !parts[3].endsWith('.manifest')) {
         throw new Error(`Unsupported Lance version file: ${file.path}`);
       }
-      await assertLocalManifest(path.join(basePath, file.path));
+      await assertLocalManifest(path.join(basePath, file.path), ENGINE_VERSION);
     }
   }
   const hashes = await readMetadata(basePath, schemaVersion);
   await assertFresh(hashes);
+  if (await exists(snapshotRoot)) {
+    // Both index locks are held, so no other supported exporter can own a
+    // staging directory. Reclaim abandoned copies even when reusing output.
+    // Leave published generations, symlinks, and unrelated entries alone.
+    for (const entry of await fs.readdir(snapshotRoot, { withFileTypes: true })) {
+      if (entry.isDirectory() && /^\.preparing-[a-zA-Z0-9]{6}$/.test(entry.name)) {
+        await fs.rm(path.join(snapshotRoot, entry.name), { recursive: true, force: true });
+      }
+    }
+  }
   const sourceFingerprint = digest(JSON.stringify({ policy: POLICY_VERSION, engine: ENGINE_VERSION, files: sourceFiles }));
   const snapshotPath = path.join(snapshotRoot, sourceFingerprint);
   if (await exists(snapshotPath)) {
