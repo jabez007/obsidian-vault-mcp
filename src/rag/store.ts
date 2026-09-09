@@ -104,6 +104,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Match the vault scanner: lowercase markdown outside hidden directories.
+function isIndexableNotePath(relativePath: string): boolean {
+  const normalized = path.posix.normalize(relativePath.replace(/\\/g, '/'));
+  return normalized.endsWith('.md') && !normalized.split('/').some(segment => segment.startsWith('.'));
+}
+
 export class VaultIndexer {
   private db: lancedb.Connection | null = null;
   private currentDbPath: string | null = null;
@@ -147,7 +153,7 @@ export class VaultIndexer {
       throw new Error(`Invalid file path (control chars): ${relativePath}`);
     }
 
-    return normalized;
+    return path.posix.normalize(normalized);
   }
 
   private async getPaths(vaultPath: string, workspacePath?: string | null, vaultId?: string | null) {
@@ -358,7 +364,8 @@ export class VaultIndexer {
   }
 
   private async listMarkdownFiles(vaultPath: string): Promise<string[]> {
-    return glob('**/*.md', { cwd: vaultPath, absolute: true, follow: true });
+    const files = await glob('**/*.md', { cwd: vaultPath, absolute: true, follow: true, dot: false, nocase: false, nodir: true });
+    return files.filter(file => isIndexableNotePath(path.relative(vaultPath, file)));
   }
 
   private filterIndexableMarkdownFiles(vaultPath: string, discoveredFiles: string[]): string[] {
@@ -420,12 +427,12 @@ export class VaultIndexer {
   // stats) so our own note creations do not raise false stale notices; the
   // residual blind spot is an external deletion or timestamp-preserving sync
   // landing between full indexes, which the next indexVault reconciles.
-  private async mergeIndexMetadataForFile(metadataPath: string, vaultPath: string, absoluteFilePath: string) {
+  private async mergeIndexMetadataForFile(metadataPath: string, vaultPath: string, absoluteFilePath: string | null) {
     const previous = await this.readIndexMetadata(metadataPath);
     if (!previous) return; // stays missing until the next full index
     const [files, fileStat] = await Promise.all([
       this.listMarkdownFiles(vaultPath),
-      fs.stat(absoluteFilePath).catch(() => null),
+      absoluteFilePath ? fs.stat(absoluteFilePath).catch(() => null) : null,
     ]);
     await this.writeIndexMetadata(metadataPath, {
       fileCount: files.length,
@@ -643,15 +650,50 @@ export class VaultIndexer {
     return { success: true, chunks: chunks.length, contentHash };
   }
 
+  // Called with both locks held. Skipped writes can clean old pollution without
+  // creating a database or loading the embedding model.
+  private async removeExcludedPaths(
+    vaultPath: string, paths: string[], workspacePath?: string | null, vaultId?: string | null,
+  ): Promise<IndexResult> {
+    const { dbPath, hashPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+    const exists = await fs.stat(dbPath).then(() => true).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    });
+    if (exists) {
+      const db = await this.getDb(vaultPath, workspacePath, vaultId);
+      if (await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) return this.fullReindexRequiredResult();
+      if ((await db.tableNames()).includes(NOTES_TABLE_NAME)) {
+        const table = await db.openTable(NOTES_TABLE_NAME);
+        try { await this.deleteRowsForPaths(table, paths); } finally { table.close(); }
+      }
+    }
+    let hashes: Record<string, string>;
+    try {
+      hashes = JSON.parse(await fs.readFile(hashPath, 'utf8'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { success: true, chunks: 0, message: 'File excluded from the markdown index.' };
+      }
+      throw error;
+    }
+    for (const p of paths) delete hashes[p];
+    await this.writeJsonAtomic(hashPath, hashes);
+    return { success: true, chunks: 0, message: 'File excluded from the markdown index.' };
+  }
+
   public async indexFile(vaultPath: string, relativePath: string, workspacePath?: string | null, vaultId?: string | null): Promise<IndexResult> {
     const release = await this.acquireLock();
     let releaseIndexLock: (() => Promise<void>) | null = null;
     try {
       const normalizedPath = this.validatePath(relativePath);
+      const filePath = getSafeFilePath(vaultPath, normalizedPath);
       const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
       releaseIndexLock = await this.acquireIndexLock(lockPath);
+      if (!isIndexableNotePath(normalizedPath)) {
+        return await this.removeExcludedPaths(vaultPath, [normalizedPath], workspacePath, vaultId);
+      }
       const embedder = Embedder.getInstance();
-      const filePath = getSafeFilePath(vaultPath, relativePath);
       const db = await this.getDb(vaultPath, workspacePath, vaultId);
       const tableNames = await db.tableNames();
 
@@ -993,10 +1035,19 @@ export class VaultIndexer {
     try {
       const sourcePath = this.validatePath(sourceRelativePath);
       const destPath = this.validatePath(destRelativePath);
+      getSafeFilePath(vaultPath, sourcePath);
+      const filePath = getSafeFilePath(vaultPath, destPath);
+      const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];
       const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
       releaseIndexLock = await this.acquireIndexLock(lockPath);
+      if (!isIndexableNotePath(destPath)) {
+        const result = await this.removeExcludedPaths(vaultPath, pathsToDelete, workspacePath, vaultId);
+        if (result.success && isIndexableNotePath(sourcePath)) {
+          await this.mergeIndexMetadataForFile(metadataPath, vaultPath, null);
+        }
+        return result;
+      }
       const embedder = Embedder.getInstance();
-      const filePath = getSafeFilePath(vaultPath, destRelativePath);
       const db = await this.getDb(vaultPath, workspacePath, vaultId);
       const tableNames = await db.tableNames();
 
@@ -1017,7 +1068,6 @@ export class VaultIndexer {
       }
       await this.ensureFtsIndex(table);
 
-      const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];
       const result = await this.indexNoteIntoTable(table, embedder, vaultPath, destPath, pathsToDelete);
       if (!result.success) return result;
 

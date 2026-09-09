@@ -224,7 +224,7 @@ export const obsidianTools: ObsidianTool[] = [
     {
         name: "obsidian_create_note",
         description:
-            "Create a new note with the given content. Refuses to replace an existing note unless overwrite is true.",
+            "Create a note or text configuration file with the given content. Only lowercase .md files outside hidden paths are indexed for search. Refuses to replace an existing file unless overwrite is true.",
         inputSchema: {
             type: "object",
             properties: {
