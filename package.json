@@ -61,7 +61,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
-    "@lancedb/lancedb": "^0.27.2",
+    "@lancedb/lancedb": "0.27.2",
     "apache-arrow": "^18.1.0",
     "moment": "^2.30.1"
   },
