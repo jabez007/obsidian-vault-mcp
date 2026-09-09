@@ -38,6 +38,7 @@ async function createFakeContext(configOverrides: Partial<ToolConfig> = {}) {
   };
   const indexer: VaultIndexerLike = {
     reset: vi.fn(async () => {}),
+    prepareIndexSnapshot: vi.fn(async () => ({ success: true, snapshotPath: "/snapshot", reused: false })),
     indexFile: vi.fn(async () => ({ success: true, chunks: 1 })),
     indexVault: vi.fn(async () => ({ success: true, chunks: 2 })),
     moveFile: vi.fn(async () => ({ success: true, chunks: 1 })),
@@ -79,7 +80,7 @@ describe('tool registry dispatch', () => {
 
   it('generates the MCP tool list from the registry', () => {
     const response = listToolsResponse();
-    expect(response.tools).toHaveLength(18);
+    expect(response.tools).toHaveLength(19);
     expect(response.tools.map((tool) => tool.name)).toContain('obsidian_rag_query');
     expect(response.tools.find((tool) => tool.name === 'obsidian_rag_index')?.inputSchema.properties?.force_reindex).toEqual({
       type: 'boolean',

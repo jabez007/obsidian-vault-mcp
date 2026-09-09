@@ -452,6 +452,32 @@ export const obsidianTools: ObsidianTool[] = [
         },
     },
     {
+        name: "obsidian_prepare_index_snapshot",
+        description: "Export a stable local index for sharing. Preserves embeddings and full-text search without loading a model. Requires a current index. Maintains a private copy once per source state and reuses unchanged exports. Returns the snapshot path and validation statistics; does not stage files in Git.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                vault_path: { type: "string", description: "Optional vault path override" },
+                workspace_path: { type: "string", description: "Optional workspace path override" },
+                vault_id: { type: "string", description: "Optional unique identifier for the vault" },
+            },
+        },
+        async handler(args, context) {
+            try {
+                return JSON.stringify(await context.indexer.prepareIndexSnapshot(
+                    context.getVaultPath(args.vault_path),
+                    context.getWorkspacePath(args.workspace_path),
+                    context.getVaultId(args.vault_id),
+                ));
+            } catch (error) {
+                return JSON.stringify({ success: false, error: {
+                    code: "SNAPSHOT_PREPARATION_FAILED",
+                    message: error instanceof Error ? error.message : String(error),
+                } });
+            }
+        },
+    },
+    {
         name: "obsidian_rag_query",
         description:
             "Perform graph-aware semantic search on the indexed vault. Supports optional entity/community filters and returns clean chunk content with heading breadcrumbs.",

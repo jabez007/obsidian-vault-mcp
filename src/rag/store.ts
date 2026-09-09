@@ -10,6 +10,7 @@ import md5 from 'md5';
 import { Embedder } from './embedder.js';
 import { buildEmbeddingInputs, ChunkingOptions, normalizeToStringArray, NoteMetadata } from './chunking.js';
 import { getSafeFilePath } from '../utils.js';
+import { prepareSnapshot, SnapshotResult } from './snapshot.js';
 
 function getFirstNumericEnv(keys: string[], fallback: number): number {
   for (const key of keys) {
@@ -119,14 +120,31 @@ export class VaultIndexer {
 
   constructor() {}
 
-  private async acquireLock(): Promise<() => void> {
+  private async acquireLock(waitMs?: number): Promise<() => void> {
     let release: () => void;
     const nextLock = new Promise<void>((resolve) => {
       release = resolve;
     });
     const wait = this.lock;
     this.lock = nextLock;
-    await wait;
+    if (waitMs === undefined) {
+      await wait;
+    } else {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          wait,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Timed out waiting for the in-process RAG index lock. Retry after indexing finishes.')), waitMs);
+          }),
+        ]);
+      } catch (error) {
+        // Keep later waiters behind the current owner, but release this
+        // abandoned queue entry as soon as that owner finishes.
+        void wait.then(() => release());
+        throw error;
+      } finally { clearTimeout(timer); }
+    }
     return release!;
   }
 
@@ -191,6 +209,7 @@ export class VaultIndexer {
     const schemaVersionPath = path.join(baseStorePath, SCHEMA_VERSION_FILE_NAME);
 
     // Ensure the storage directory exists
+    getSafeFilePath(storageParent, path.relative(storageParent, baseStorePath));
     await fs.mkdir(baseStorePath, { recursive: true });
     
     return { dbPath, hashPath, lockPath, metadataPath, schemaVersionPath };
@@ -482,13 +501,14 @@ export class VaultIndexer {
       return now - stat.mtimeMs > 5000;
     }
     const createdAt = Number.isFinite(info.createdAt) ? Number(info.createdAt) : stat.mtimeMs;
-    if (now - createdAt > staleMs) return true;
     // A pid recorded on another machine (shared or synced storage) says
     // nothing about a local process; only trust liveness for locks created
-    // on this host and fall back to the age check otherwise.
+    // on this host. Age is only a fallback for legacy locks without a PID.
     const sameHost = !info.hostname || info.hostname === os.hostname();
-    if (sameHost && typeof info.pid === 'number' && !this.isPidRunning(info.pid)) return true;
-    return false;
+    if (sameHost && typeof info.pid === 'number') return !this.isPidRunning(info.pid);
+    // Never steal a remote host's lock: age cannot prove that its owner died.
+    if (!sameHost) return false;
+    return now - createdAt > staleMs;
   }
 
   private async acquireIndexLock(lockPath: string): Promise<() => Promise<void>> {
@@ -1129,6 +1149,32 @@ export class VaultIndexer {
     // checkout, sync rollbacks) are invisible to this heuristic; a forced
     // obsidian_rag_index run is the recovery.
     return { stale: false };
+  }
+
+  public async prepareIndexSnapshot(vaultPath: string, workspacePath?: string | null, vaultId?: string | null): Promise<SnapshotResult> {
+    const waitMs = Math.max(0, getFirstNumericEnv(['OBSIDIAN_INDEX_LOCK_WAIT_MS', 'CODEX_OBSIDIAN_INDEX_LOCK_WAIT_MS', 'GEMINI_OBSIDIAN_INDEX_LOCK_WAIT_MS'], 30000));
+    const release = await this.acquireLock(waitMs);
+    let releaseIndexLock: (() => Promise<void>) | undefined;
+    try {
+      const paths = await this.getPaths(vaultPath, workspacePath, vaultId);
+      const basePath = path.dirname(paths.dbPath);
+      releaseIndexLock = await this.acquireIndexLock(paths.lockPath);
+      return await prepareSnapshot(basePath, NOTES_TABLE_SCHEMA, NOTES_TABLE_SCHEMA_VERSION, async (hashes) => {
+        const files = this.filterIndexableMarkdownFiles(vaultPath, await this.listMarkdownFiles(vaultPath));
+        if (files.length !== Object.keys(hashes).length) {
+          throw new Error('Index is stale: note membership changed. Run obsidian_rag_index before preparing a snapshot.');
+        }
+        for (const file of files) {
+          const relative = path.relative(vaultPath, file).replace(/\\/g, '/');
+          const content = await fs.readFile(getSafeFilePath(vaultPath, relative), 'utf8');
+          if (hashes[relative] !== md5(content)) {
+            throw new Error(`Index is stale: ${relative} changed. Run obsidian_rag_index before preparing a snapshot.`);
+          }
+        }
+      });
+    } finally {
+      try { await releaseIndexLock?.(); } finally { release(); }
+    }
   }
 
   public async search(

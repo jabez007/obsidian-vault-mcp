@@ -199,6 +199,57 @@ If the session hook reports `RAG index refresh failed`, open the log path includ
 
 Search indexes lowercase `.md` files outside hidden files and directories. This rule applies to vault scans, individual writes, and moves. Tools can still create text configuration files such as `.base` or `.yaml`; those files are excluded from search. Rewriting an excluded file removes any old rows for that path. A vault scan also reconciles old excluded entries and deleted files.
 
+## Prepare an index for sharing
+
+Run `obsidian_prepare_index_snapshot` after indexing your edits. From a built checkout:
+
+```bash
+node dist/index.js obsidian_prepare_index_snapshot \
+	--vault_path /absolute/path/to/vault \
+	--workspace_path /absolute/path/to/workspace \
+	--vault_id shared-vault
+```
+
+You can omit these arguments to use the configured vault, workspace, and vault ID. The MCP tool accepts the same arguments and applies the same path boundaries. Preparation checks note contents against the recorded hashes, including changes that preserve timestamps. If the index is stale, run `obsidian_rag_index` and retry. Preparation does not index notes, generate embeddings, or download a model.
+
+### Snapshot contract
+
+The command returns JSON with `success`, `snapshotPath`, `sourceFingerprint`, `sourceVersion`, and `reused`. The output directory is `<vault-storage>/snapshots/<sourceFingerprint>/`. It contains `lancedb/`, `file-hashes.json`, `schema-version.json`, `index-metadata.json`, and `snapshot.json`. The manifest records payload file hashes and validation results. Locks and unfinished metadata writes are excluded.
+
+Preparation holds the shared index lock while it copies and validates the index. It maintains the private copy and publishes the final directory only after validation succeeds. Live queries can continue because preparation does not prune the live database. A live local process's lock never expires solely because it is old. A lock from another host requires explicit resolution after confirming that its owner has stopped. `OBSIDIAN_INDEX_LOCK_WAIT_MS` controls the wait, with a default of 30 seconds.
+
+Published exports remain unchanged when the live database changes or undergoes maintenance. An unchanged source reuses the same export after checking its file hashes. A modified export causes an error instead of being overwritten. The command never automatically deletes older exports. Remove them only after all staging or copying operations using them have finished. A killed process can leave a `.preparing-*` directory; that directory is unpublished and can be removed after the process stops.
+
+### Maintenance and compatibility
+
+Each new source state gets one `optimize()` call on its private copy, with the retention cutoff set to the preparation time and `deleteUnverified: false`. This combines compaction, index maintenance, and eligible history cleanup. Reusing an export does not call maintenance or rewrite files. Live-index maintenance retains its existing seven-day policy.
+
+This policy reduces obsolete history but does not promise exactly one version or the smallest possible export. Versions created during maintenance and unverified files can remain. Compaction can create new LFS objects, so reduced directory size does not guarantee fewer upload bytes for every workload. Preparation cannot reclaim objects already uploaded to GitHub LFS.
+
+The MVP supports ordinary local indexes created by this application, with the current notes schema and an existing full-text index. Tagged tables, shallow clones, externally stored data, and custom database layouts are unsupported. Tagged tables fail with the retained tag names; preparation never deletes tags. Validation checks all current rows and vectors, executes stored-vector and full-text queries, and reopens the maintained database without rebuilding its indexes. An empty indexed vault is supported.
+
+The result records `compatibility.notesTableSchemaVersion` and `compatibility.lanceDbVersion`. Use the same application and compatible LanceDB runtime on the receiving machine; validation currently covers LanceDB 0.27.2. A read-only manifest check rejects external references and unfamiliar formats before maintenance. All cleanup uses the supported database API.
+
+To install an export, stop the receiving MCP processes and replace the target's `lancedb/` directory and three companion JSON files together. Do not merge the exported database with an existing one. Keep the corresponding vault notes at the same relative paths. Normal semantic queries still require the query embedding model; preparation and stored-vector validation do not.
+
+`before` and `after` report payload bytes and file counts, excluding `snapshot.json`. `versionsBefore`, `versionsRemoved`, and `versionsRetained` report database history. `retention`, `compaction`, and `validation` describe the applied policy and checks. Failures return `success: false` with an `error.code` and actionable `error.message`. The CLI writes failures to stderr and exits nonzero; MCP returns `isError: true`.
+
+### Template hook handoff
+
+Capture the successful JSON response before selecting files to stage. For example, with `jq` installed:
+
+```bash
+set -e
+snapshot_result_file="$(mktemp)"
+trap 'rm -f "$snapshot_result_file"' EXIT
+node dist/index.js obsidian_prepare_index_snapshot > "$snapshot_result_file"
+snapshot_path="$(jq -er '.snapshotPath' "$snapshot_result_file")"
+```
+
+The template hook then stages or copies the contents of `snapshot_path`. It must use that exact generation through completion. Keep the local `snapshots/` cache out of Git; publishing every generation would retain unnecessary copies. If the template uses a fixed tracked export directory, the hook owns replacing its contents and coordinating staging there. Keep that tracked directory separate from the live database.
+
+The template owns hook installation, staged-change detection, partial-staging policy, Git staging, and optional size limits. The MCP command does not invoke Git. Commit the vault notes corresponding to the snapshot, and reject or reconcile partial note staging in the hook.
+
 ## Indexing Performance Tuning
 
 Individual writes and moves update searchable content immediately without optimizing the whole table. A vault scan that changes the index runs maintenance once at the end. An unchanged scan skips maintenance, including session-start scans.
@@ -263,6 +314,7 @@ The following tools are exposed through the MCP server for either host:
 
 ### Retrieval & Search
 - `obsidian_rag_index`: Index the vault for semantic search.
+- `obsidian_prepare_index_snapshot`: Export a stable, validated index for sharing without generating embeddings.
 - `obsidian_rag_query`: Perform a semantic search query. Results carry clean note content plus a heading breadcrumb; optional `entities`/`communities` parameters (exact, case-sensitive frontmatter labels; comma-separated on the CLI) restrict results to chunks tagged with those labels.
 - `obsidian_search_notes`: Simple text/filename search.
 - `obsidian_list_notes`: List files in a folder.

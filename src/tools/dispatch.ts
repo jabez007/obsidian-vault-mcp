@@ -30,6 +30,9 @@ export async function dispatchMcpTool(
     context: ToolContext,
 ) {
     const text = await callRegistryTool(name, args, context);
+    if (name === "obsidian_prepare_index_snapshot" && JSON.parse(text).success === false) {
+        return { content: [{ type: "text" as const, text }], isError: true };
+    }
     return { content: [{ type: "text" as const, text }] };
 }
 
@@ -128,10 +131,11 @@ export async function dispatchCliTool(
             return { handled: true, exitCode: 0 };
         }
 
+        const output = await callRegistryTool(toolName, args, context);
         return {
             handled: true,
-            exitCode: 0,
-            output: await callRegistryTool(toolName, args, context),
+            exitCode: toolName === "obsidian_prepare_index_snapshot" && JSON.parse(output).success === false ? 1 : 0,
+            output,
         };
     } catch (error: any) {
         return {

@@ -203,7 +203,7 @@ describe('VaultIndexer path resolution and storage', () => {
     await fs.mkdir(storePath, { recursive: true });
     await fs.writeFile(
       lockPath,
-      JSON.stringify({ pid: process.pid, createdAt: Date.now() - 10000, token: 'stale-test-lock' }),
+      JSON.stringify({ pid: 2147483647, createdAt: Date.now() - 10000, token: 'stale-test-lock' }),
       'utf-8',
     );
     process.env.OBSIDIAN_INDEX_LOCK_WAIT_MS = '1000';
