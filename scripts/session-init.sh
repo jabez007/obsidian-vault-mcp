@@ -58,18 +58,7 @@ if [ -n "$VAULT_PATH" ] && [ -d "$VAULT_PATH" ]; then
   note_count=$(find "$VAULT_PATH" -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' ')
   status_line="Obsidian vault connected: $VAULT_PATH ($note_count notes)"
 
-  if index_output=$("${SERVER_COMMAND[@]}" obsidian_rag_index 2>/dev/null); then
-    if printf '%s' "$index_output" | grep -q '"chunks":0'; then
-      index_line="RAG index up to date"
-    elif printf '%s' "$index_output" | grep -q '"chunks"'; then
-      chunks=$(printf '%s' "$index_output" | grep -o '"chunks":[0-9]*' | head -n 1 | grep -o '[0-9]*')
-      index_line="RAG index updated: $chunks chunks indexed"
-    else
-      index_line="RAG index check completed"
-    fi
-  else
-    index_line="RAG index refresh failed"
-  fi
+  index_line=$(node "$SCRIPT_DIR/session-index.mjs" "${SERVER_COMMAND[@]}" obsidian_rag_index)
 
   message="$status_line"$'\n'"$index_line"
 else
