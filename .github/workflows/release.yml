@@ -16,7 +16,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify release commit is on main
+        run: |
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "Release tags must point to commits on main." >&2
+            exit 1
+          fi
 
       - name: Verify tag matches package version
         run: |

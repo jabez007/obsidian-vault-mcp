@@ -50,9 +50,56 @@ Thank you for your interest in contributing! We welcome pull requests, bug repor
 
 ## Pull Requests
 
-1.  Create a feature branch (`git checkout -b feature/amazing-feature`).
-2.  Commit your changes.
-3.  Push to the branch.
-4.  Open a Pull Request.
+Use `main` as the only long-lived branch. Create a new branch for each change, including fixes and release preparation.
 
-Please describe your changes and the problem they solve.
+1. Update your local `main` and create a branch:
+
+   ```bash
+   git switch main
+   git pull --ff-only origin main
+   git switch -c feat/amazing-feature
+   ```
+
+2. Commit your changes and push the branch:
+
+   ```bash
+   git push -u origin feat/amazing-feature
+   ```
+
+3. Open a PR targeting `main`. Describe the problem, the change, and how you tested it.
+4. Address CodeRabbit's review and wait for CI to pass.
+5. Squash merge the PR. Delete the source branch if GitHub does not delete it automatically.
+6. Confirm that the PR is merged and that the branch has no additional work. Update your local `main` and remove the merged local branch:
+
+   ```bash
+   git switch main
+   git pull --ff-only origin main
+   git fetch origin --prune
+   git branch -D feat/amazing-feature
+   ```
+
+   Squash merges create a new commit, so Git's `-d` check can reject a branch whose changes are already in `main`.
+
+Start the next change from the updated `main`. Do not reuse a squash-merged branch or maintain a separate `development` branch.
+
+## Publish a release
+
+1. Create a release preparation branch from `main`.
+2. Update `package.json` and `package-lock.json` with `npm version <version> --no-git-tag-version`.
+3. Run `npm run sync-assets` and update `CHANGELOG.md` and `RELEASE_NOTES.md`.
+4. Commit the version changes and generated assets, then open a PR to `main` for CodeRabbit review and CI.
+5. Merge the PR and update your local `main`:
+
+   ```bash
+   git switch main
+   git pull --ff-only origin main
+   ```
+
+6. Confirm that the intended release commit has passed CI. Tag that commit on `main` using the version in its `package.json`. For example, for version `2.0.1` at the current tip:
+
+   ```bash
+   git tag -a v2.0.1 -m "Release v2.0.1" main
+   git push origin v2.0.1
+   ```
+
+Pushing a `v*` tag starts the Release workflow and publishes the package to npm after validation. The workflow requires the tagged commit to belong to `main` and the tag version to match `package.json`. Keep published release tags unchanged.
