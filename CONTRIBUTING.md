@@ -44,6 +44,7 @@ Thank you for your interest in contributing! We welcome pull requests, bug repor
 
 ## Guidelines
 
+- **Issue tracking**: Use [GitHub Issues](https://github.com/jabez007/obsidian-vault-mcp/issues) for bug reports, feature requests, and work status. Do not commit duplicate issue records or PR description drafts.
 - **TypeScript**: Ensure your code is typed. Avoid `any` where possible.
 - **Tools**: If adding a new tool, define its schema in `src/index.ts` and add the implementation logic in the `CallToolRequestSchema` handler.
 - **Dependencies**: Keep dependencies minimal. This extension runs locally, so download size and startup time matter.

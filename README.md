@@ -42,7 +42,9 @@ claude plugin marketplace add . --scope local
 claude plugin install obsidian-vault-mcp@obsidian-vault-mcp --scope local
 ```
 
-The Claude marketplace uses `.claude-plugin/marketplace.json` and installs the generated wrapper under `plugins/claude-obsidian-vault-mcp/`. That wrapper is generated from `.claude-plugin/plugin.json`, `.claude-plugin/mcp.json`, `.claude-plugin/hooks.json`, root `skills/`, `scripts/session-init.sh`, `scripts/claude-mcp-server.sh`, `package.json`, `package-lock.json`, and `dist/index.js`. The MCP server runs through `scripts/claude-mcp-server.sh`, which installs production dependencies into Claude's `${CLAUDE_PLUGIN_DATA}` directory before launching the bundled server. The `SessionStart` hook runs `scripts/session-init.sh`, which reports vault status and refreshes the RAG index when a vault is configured.
+The Claude marketplace uses `.claude-plugin/marketplace.json` and installs the generated wrapper under `plugins/claude-obsidian-vault-mcp/`. That wrapper is generated from `.claude-plugin/plugin.json`, `.claude-plugin/mcp.json`, `.claude-plugin/hooks.json`, root `skills/`, `scripts/session-init.sh`, `scripts/session-index.mjs`, `scripts/claude-mcp-server.sh`, `package.json`, `package-lock.json`, and `dist/index.js`. The MCP server runs through `scripts/claude-mcp-server.sh`, which installs production dependencies into Claude's `${CLAUDE_PLUGIN_DATA}` directory before launching the bundled server. The `SessionStart` hook runs `scripts/session-init.sh`, which reports vault status and refreshes the RAG index when a vault is configured.
+
+The Claude launcher requires Bash, `sha256sum`, and `flock`. On Linux, `flock` is provided by util-linux. Concurrent launches share an install lock and recheck the dependency stamp after waiting. The lock is released before the server starts. `OBSIDIAN_INSTALL_LOCK_WAIT_SECONDS` sets the maximum wait, in seconds, and defaults to `120`.
 
 ### Codex CLI plugin
 
@@ -193,7 +195,74 @@ The first time you use a tool, the server can persist `vault_path`, `workspace_p
 - **Module Not Found Error**: If you see an error like `Cannot find module '@lancedb/lancedb'`, launch through `npx -y @jabez007/obsidian-vault-mcp@2` so npm installs runtime dependencies automatically. For local development, run `npm install && npm run build`.
 - **Logs**: Since this runs as an MCP server, errors are typically output to stderr.
 
+If the session hook reports `RAG index refresh failed`, open the log path included in its message. The hook keeps the five newest failure logs, each limited to the last 64 KiB of diagnostics, under `${CLAUDE_PLUGIN_DATA}/logs`. Other hosts use `${XDG_STATE_HOME}/obsidian-vault-mcp/logs`, or `~/.local/state/obsidian-vault-mcp/logs` when `XDG_STATE_HOME` is unset. Logs include stderr, the CLI response, and exit status. Successful runs do not retain a log.
+
+Search indexes lowercase `.md` files outside hidden files and directories. This rule applies to vault scans, individual writes, and moves. Tools can still create text configuration files such as `.base` or `.yaml`; those files are excluded from search. Rewriting an excluded file removes any old rows for that path. A vault scan also reconciles old excluded entries and deleted files.
+
+## Prepare an index for sharing
+
+Run `obsidian_prepare_index_snapshot` after indexing your edits. From a built checkout:
+
+```bash
+node dist/index.js obsidian_prepare_index_snapshot \
+	--vault_path /absolute/path/to/vault \
+	--workspace_path /absolute/path/to/workspace \
+	--vault_id shared-vault
+```
+
+You can omit these arguments to use the configured vault, workspace, and vault ID. The MCP tool accepts the same arguments and applies the same path boundaries. Preparation checks note contents against the recorded hashes, including changes that preserve timestamps. If the index is stale, run `obsidian_rag_index` and retry. Preparation does not index notes, generate embeddings, or download a model.
+
+### Snapshot contract
+
+The command returns JSON with `success`, `snapshotPath`, `sourceFingerprint`, `sourceVersion`, and `reused`. The output directory is `<vault-storage>/snapshots/<sourceFingerprint>/`. It contains `lancedb/`, `file-hashes.json`, `schema-version.json`, `index-metadata.json`, and `snapshot.json`. The manifest records payload file hashes and validation results. Locks and unfinished metadata writes are excluded.
+
+Preparation holds the shared index lock while it copies and validates the index. It maintains the private copy and publishes the final directory only after validation succeeds. Live queries can continue because preparation does not prune the live database. A live local process's lock never expires solely because it is old. On Linux, the lock records the boot ID and process start time so a reused PID cannot retain a dead owner's lock. When this identity is unavailable, including on other platforms and in older locks, the existing process-liveness check remains in effect. A lock from another host requires explicit resolution after confirming that its owner has stopped. `OBSIDIAN_INDEX_LOCK_WAIT_MS` controls the wait, with a default of 30 seconds.
+
+Published exports remain unchanged when the live database changes or undergoes maintenance. An unchanged source reuses the same export after checking its file hashes. A modified export causes an error instead of being overwritten. The command never automatically deletes older published exports. Remove them only after all staging or copying operations using them have finished. A killed process can leave an unpublished `.preparing-*` directory. The next valid preparation removes abandoned staging directories under the index locks, even when it reuses an existing export. This cleanup skips symlinks and unrelated entries.
+
+### Maintenance and compatibility
+
+Each new source state gets one `optimize()` call on its private copy, with the retention cutoff set to the preparation time and `deleteUnverified: false`. This combines compaction, index maintenance, and eligible history cleanup. Reusing an export does not call maintenance or rewrite files. Live-index maintenance retains its existing seven-day policy.
+
+This policy reduces obsolete history but does not promise exactly one version or the smallest possible export. Versions created during maintenance and unverified files can remain. Compaction can create new LFS objects, so reduced directory size does not guarantee fewer upload bytes for every workload. Preparation cannot reclaim objects already uploaded to GitHub LFS.
+
+The MVP supports ordinary local indexes created by this application, with the current notes schema and an existing full-text index. Tagged tables, shallow clones, externally stored data, and custom database layouts are unsupported. Tagged tables fail with the retained tag names; preparation never deletes tags. Validation checks all current rows and vectors, executes stored-vector and full-text queries, and reopens the maintained database without rebuilding its indexes. An empty indexed vault is supported.
+
+The result records `compatibility.notesTableSchemaVersion` and `compatibility.lanceDbVersion`. Preparation requires LanceDB 0.27.2 because its manifest field map is version-specific. Other installed versions fail before manifest parsing. Use the same application and compatible LanceDB runtime on the receiving machine. A read-only manifest check rejects external references and unfamiliar formats before maintenance. All cleanup uses the supported database API.
+
+To install an export, stop the receiving MCP processes and replace the target's `lancedb/` directory and three companion JSON files together. Do not merge the exported database with an existing one. Keep the corresponding vault notes at the same relative paths. Normal semantic queries still require the query embedding model; preparation and stored-vector validation do not.
+
+`before` and `after` report payload bytes and file counts, excluding `snapshot.json`. `versionsBefore`, `versionsRemoved`, and `versionsRetained` report database history. `retention`, `compaction`, and `validation` describe the applied policy and checks. Failures return `success: false` with an `error.code` and actionable `error.message`. The CLI writes failures to stderr and exits nonzero; MCP returns `isError: true`.
+
+### Template hook handoff
+
+Capture the successful JSON response before selecting files to stage. For example, with `jq` installed:
+
+```bash
+set -e
+snapshot_result_file="$(mktemp)"
+trap 'rm -f "$snapshot_result_file"' EXIT
+node dist/index.js obsidian_prepare_index_snapshot > "$snapshot_result_file"
+snapshot_path="$(jq -er '.snapshotPath' "$snapshot_result_file")"
+```
+
+The template hook then stages or copies the contents of `snapshot_path`. It must use that exact generation through completion. Keep the local `snapshots/` cache out of Git; publishing every generation would retain unnecessary copies. If the template uses a fixed tracked export directory, the hook owns replacing its contents and coordinating staging there. Keep that tracked directory separate from the live database.
+
+The template owns hook installation, staged-change detection, partial-staging policy, Git staging, and optional size limits. The MCP command does not invoke Git. Commit the vault notes corresponding to the snapshot, and reject or reconcile partial note staging in the hook.
+
 ## Indexing Performance Tuning
+
+Individual writes and moves update searchable content immediately without optimizing the whole table. A vault scan that changes the index runs maintenance once at the end. An unchanged scan skips maintenance, including session-start scans.
+
+After a batch of edits, call `obsidian_rag_index` with `maintenance: true` to compact fragments and update search indexes even when all note hashes already match. From a built local checkout:
+
+```bash
+node dist/index.js obsidian_rag_index --maintenance true
+```
+
+Explicit maintenance uses the same per-vault index lock as writes and reports `maintenancePerformed: true` on success. It cannot be combined with `file_path`. Full-text and semantic queries include rows added since the last maintenance run, but querying many unindexed fragments can take longer.
+
+Maintenance retains seven days of table history and leaves unverified-file deletion disabled. Compaction can temporarily increase retained bytes because recent versions still reference older files. It does not remove objects from existing Git LFS history. For repeatable storage and latency measurements, see [the maintenance benchmark](docs/index-maintenance-benchmark.md).
 
 > [!WARNING]
 > Initial semantic indexing can be time- and resource-intensive, especially on large vaults.
@@ -219,7 +288,7 @@ npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index
 ## Host-specific assets
 
 - **Canonical shared assets** live at the repo root. Edit `skills/` for skills and `agents/` for local agents; do not edit generated host copies by hand.
-- **Claude Code** uses `.claude-plugin/marketplace.json` and the generated wrapper under `plugins/claude-obsidian-vault-mcp/`. The wrapper contains Claude-specific `.claude-plugin/plugin.json`, `.mcp.json`, `hooks/hooks.json`, `skills/`, `scripts/session-init.sh`, `scripts/claude-mcp-server.sh`, package manifests, and `dist/index.js`.
+- **Claude Code** uses `.claude-plugin/marketplace.json` and the generated wrapper under `plugins/claude-obsidian-vault-mcp/`. The wrapper contains Claude-specific `.claude-plugin/plugin.json`, `.mcp.json`, `hooks/hooks.json`, `skills/`, `scripts/session-init.sh`, `scripts/session-index.mjs`, `scripts/claude-mcp-server.sh`, package manifests, and `dist/index.js`.
 - **Codex package/checkouts** use `.codex-plugin/plugin.json`, `.mcp.json`, `skills/`, and `agents/` from the repo root.
 - **Codex repo marketplace installs** use `.agents/plugins/marketplace.json` and the plugin wrapper under `plugins/obsidian-vault-mcp/`. The wrapper's `.codex-plugin/`, `.mcp.json`, and `skills/` are generated from the root assets.
 - **OpenCode** uses `opencode.json` with its top-level `mcp` configuration and the built `dist/index.js` from this checkout.
@@ -245,6 +314,7 @@ The following tools are exposed through the MCP server for either host:
 
 ### Retrieval & Search
 - `obsidian_rag_index`: Index the vault for semantic search.
+- `obsidian_prepare_index_snapshot`: Export a stable, validated index for sharing without generating embeddings.
 - `obsidian_rag_query`: Perform a semantic search query. Results carry clean note content plus a heading breadcrumb; optional `entities`/`communities` parameters (exact, case-sensitive frontmatter labels; comma-separated on the CLI) restrict results to chunks tagged with those labels.
 - `obsidian_search_notes`: Simple text/filename search.
 - `obsidian_list_notes`: List files in a folder.

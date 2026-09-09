@@ -1,3 +1,25 @@
+# Release v2.1.0
+
+## Summary
+
+Version 2.1.0 adds local index snapshots for sharing and fixes indexing consistency, Claude plugin startup, and unnecessary database maintenance.
+
+## Highlights
+
+- Prepare a validated copy of an existing index with `obsidian_prepare_index_snapshot` through CLI or MCP, without generating embeddings. Unchanged source indexes reuse the existing export, including after an unchanged vault scan.
+- Recover abandoned snapshot staging directories and support successfully indexed empty notes. Snapshot preparation reports stale input and validation failures explicitly.
+- Apply consistent markdown eligibility rules across scans, writes, and moves, and remove old excluded entries from the index.
+- Serialize Claude plugin dependency installation and retain bounded session-hook failure logs.
+- Move database optimization out of individual note writes. Run maintenance after a changed vault scan or request it explicitly with `obsidian_rag_index --maintenance true`.
+
+## Upgrade
+
+This release preserves the version 2 API and version 3 index schema. Existing version 2.0.0 indexes do not require a full rebuild. Run a normal vault scan to reconcile entries created under the previous indexing rules.
+
+Snapshot preparation currently supports local, untagged indexes using LanceDB 0.27.2. It creates a local export; Git tracking and synchronization remain the caller's responsibility. Claude plugin startup requires `flock`.
+
+---
+
 # Release v2.0.0
 
 ## Summary

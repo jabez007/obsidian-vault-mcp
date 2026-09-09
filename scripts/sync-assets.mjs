@@ -109,6 +109,11 @@ const generatedAssets = [
     type: 'file',
   },
   {
+    source: 'scripts/session-index.mjs',
+    target: 'plugins/claude-obsidian-vault-mcp/scripts/session-index.mjs',
+    type: 'file',
+  },
+  {
     source: 'scripts/claude-mcp-server.sh',
     target: 'plugins/claude-obsidian-vault-mcp/scripts/claude-mcp-server.sh',
     type: 'file',

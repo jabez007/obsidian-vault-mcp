@@ -1,6 +1,6 @@
 {
   "name": "@jabez007/obsidian-vault-mcp",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Obsidian vault MCP server with local RAG capabilities for Codex and compatible MCP hosts",
   "main": "dist/index.js",
   "bin": {
@@ -30,6 +30,7 @@
     "lint": "eslint . --ext .ts",
     "type-check": "tsc --noEmit",
     "start": "node dist/index.js",
+    "pretest": "npm run build",
     "test": "vitest run",
     "prepublishOnly": "npm run build && npm run sync-assets && npm test"
   },
@@ -60,7 +61,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
-    "@lancedb/lancedb": "^0.27.2",
+    "@lancedb/lancedb": "0.27.2",
     "apache-arrow": "^18.1.0",
     "moment": "^2.30.1"
   },

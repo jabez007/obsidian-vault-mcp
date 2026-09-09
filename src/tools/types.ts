@@ -19,6 +19,11 @@ export type ToolArguments = Record<string, unknown>;
 
 export interface VaultIndexerLike {
     reset(): Promise<void>;
+    prepareIndexSnapshot(
+        vaultPath: string,
+        workspacePath?: string | null,
+        vaultId?: string | null,
+    ): Promise<unknown>;
     indexFile(
         vaultPath: string,
         relativePath: string,
@@ -30,6 +35,7 @@ export interface VaultIndexerLike {
         force?: boolean,
         workspacePath?: string | null,
         vaultId?: string | null,
+        maintenance?: boolean,
     ): Promise<unknown>;
     moveFile(
         vaultPath: string,

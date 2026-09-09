@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+## [2.1.0] - 2026-09-09
+
+- Recover abandoned snapshot staging directories under the index locks, distinguish reused Linux PIDs from the original lock owner, and require the supported LanceDB version for manifest parsing. Build the CLI before tests and correct missing stdin callbacks in dispatch tests.
+- Keep snapshot reuse stable across unchanged scans by preserving unchanged freshness metadata. Retain hashes for successfully indexed empty notes so they can be exported without a metadata mismatch.
+- Add `obsidian_prepare_index_snapshot` through CLI and MCP. Export and validate a private copy without generating embeddings, maintain it once per source state, and reuse unchanged exports. Report stale input and preparation failures explicitly. Implements the local snapshot MVP for #23.
+- Apply the same markdown eligibility rules to scans, writes, and moves. Non-markdown writes still succeed, and old excluded index entries are removed. Fixes #19.
+- Serialize Claude dependency installation with a bounded `flock` wait. Preserve session-hook failure diagnostics in bounded logs, including failed JSON index results. Fixes #20.
+- Defer per-note LanceDB optimization until a changed vault scan or an explicit `obsidian_rag_index --maintenance true` request. Search remains current between maintenance runs. Retain seven days of table history. Fixes #21.
+
 ## [2.0.0] - 2026-08-04
 
 ### Breaking Changes

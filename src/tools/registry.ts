@@ -224,7 +224,7 @@ export const obsidianTools: ObsidianTool[] = [
     {
         name: "obsidian_create_note",
         description:
-            "Create a new note with the given content. Refuses to replace an existing note unless overwrite is true.",
+            "Create a note or text configuration file with the given content. Only lowercase .md files outside hidden paths are indexed for search. Refuses to replace an existing file unless overwrite is true.",
         inputSchema: {
             type: "object",
             properties: {
@@ -393,7 +393,7 @@ export const obsidianTools: ObsidianTool[] = [
     {
         name: "obsidian_rag_index",
         description:
-            "Index the vault for graph-aware semantic search (RAG). Automatically extracts and preserves YAML graph metadata (entities, communities) from frontmatter to enhance search context. If file_path is provided, only that file is re-indexed. Incremental by default — only re-embeds changed files. Use force_reindex to rebuild from scratch.",
+            "Index the vault for graph-aware semantic search (RAG). Preserves YAML entities and communities. If file_path is provided, only that markdown file is re-indexed, without table maintenance. Incremental by default. Use force_reindex to rebuild from scratch, or maintenance to optimize the whole index after a batch of edits even when no files changed. Maintenance retains seven days of table history.",
         inputSchema: {
             type: "object",
             properties: {
@@ -418,6 +418,10 @@ export const obsidianTools: ObsidianTool[] = [
                     description:
                         "Force full re-index, ignoring cached file hashes (default: false)",
                 },
+                maintenance: {
+                    type: "boolean",
+                    description: "Run table maintenance even if no files changed (default: false). Cannot be combined with file_path. Retains seven days of table history.",
+                },
             },
         },
         async handler(args, context) {
@@ -426,6 +430,10 @@ export const obsidianTools: ObsidianTool[] = [
             const vaultId = context.getVaultId(args.vault_id);
             const filePath = args.file_path ? String(args.file_path) : null;
             const force = booleanArg(args.force_reindex) || booleanArg(args.force);
+            const maintenance = booleanArg(args.maintenance);
+            if (filePath && maintenance) {
+                throw new Error("maintenance cannot be combined with file_path. Run maintenance on the whole vault.");
+            }
             const result = filePath
                 ? await context.indexer.indexFile(
                     vaultPath,
@@ -438,8 +446,35 @@ export const obsidianTools: ObsidianTool[] = [
                     force,
                     workspacePath,
                     vaultId,
+                    maintenance,
                 );
             return JSON.stringify(result);
+        },
+    },
+    {
+        name: "obsidian_prepare_index_snapshot",
+        description: "Export a stable local index for sharing. Preserves embeddings and full-text search without loading a model. Requires a current index. Maintains a private copy once per source state and reuses unchanged exports. Returns the snapshot path and validation statistics; does not stage files in Git.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                vault_path: { type: "string", description: "Optional vault path override" },
+                workspace_path: { type: "string", description: "Optional workspace path override" },
+                vault_id: { type: "string", description: "Optional unique identifier for the vault" },
+            },
+        },
+        async handler(args, context) {
+            try {
+                return JSON.stringify(await context.indexer.prepareIndexSnapshot(
+                    context.getVaultPath(args.vault_path),
+                    context.getWorkspacePath(args.workspace_path),
+                    context.getVaultId(args.vault_id),
+                ));
+            } catch (error) {
+                return JSON.stringify({ success: false, error: {
+                    code: "SNAPSHOT_PREPARATION_FAILED",
+                    message: error instanceof Error ? error.message : String(error),
+                } });
+            }
         },
     },
     {

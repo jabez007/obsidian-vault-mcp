@@ -10,6 +10,8 @@ import md5 from 'md5';
 import { Embedder } from './embedder.js';
 import { buildEmbeddingInputs, ChunkingOptions, normalizeToStringArray, NoteMetadata } from './chunking.js';
 import { getSafeFilePath } from '../utils.js';
+import { prepareSnapshot, SnapshotResult } from './snapshot.js';
+import { getProcessStartIdentity } from './process-identity.js';
 
 function getFirstNumericEnv(keys: string[], fallback: number): number {
   for (const key of keys) {
@@ -43,6 +45,7 @@ export interface IndexResult {
   success: boolean;
   chunks?: number;
   message?: string;
+  maintenancePerformed?: boolean;
 }
 
 export interface IndexStaleness {
@@ -60,6 +63,7 @@ interface IndexLockInfo {
   createdAt?: number;
   token?: string;
   hostname?: string;
+  processStartIdentity?: string;
 }
 
 interface IndexMetadata {
@@ -74,6 +78,7 @@ const SCHEMA_VERSION_FILE_NAME = 'schema-version.json';
 const NOTES_TABLE_NAME = 'notes';
 const NOTES_TABLE_SCHEMA_VERSION = 3;
 const EMBEDDING_DIMENSIONS = 384;
+const INDEX_RETENTION_DAYS = 7;
 const FULL_REINDEX_REQUIRED_MESSAGE =
   'RAG index schema version changed. Run obsidian_rag_index with force_reindex=true to rebuild the local index.';
 // Query results carry the clean text plus filterable metadata; embedding_text
@@ -104,6 +109,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Match the vault scanner: lowercase markdown outside hidden directories.
+function isIndexableNotePath(relativePath: string): boolean {
+  const normalized = path.posix.normalize(relativePath.replace(/\\/g, '/'));
+  return normalized.endsWith('.md') && !normalized.split('/').some(segment => segment.startsWith('.'));
+}
+
 export class VaultIndexer {
   private db: lancedb.Connection | null = null;
   private currentDbPath: string | null = null;
@@ -111,14 +122,31 @@ export class VaultIndexer {
 
   constructor() {}
 
-  private async acquireLock(): Promise<() => void> {
+  private async acquireLock(waitMs?: number): Promise<() => void> {
     let release: () => void;
     const nextLock = new Promise<void>((resolve) => {
       release = resolve;
     });
     const wait = this.lock;
     this.lock = nextLock;
-    await wait;
+    if (waitMs === undefined) {
+      await wait;
+    } else {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          wait,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Timed out waiting for the in-process RAG index lock. Retry after indexing finishes.')), waitMs);
+          }),
+        ]);
+      } catch (error) {
+        // Keep later waiters behind the current owner, but release this
+        // abandoned queue entry as soon as that owner finishes.
+        void wait.then(() => release());
+        throw error;
+      } finally { clearTimeout(timer); }
+    }
     return release!;
   }
 
@@ -147,7 +175,7 @@ export class VaultIndexer {
       throw new Error(`Invalid file path (control chars): ${relativePath}`);
     }
 
-    return normalized;
+    return path.posix.normalize(normalized);
   }
 
   private async getPaths(vaultPath: string, workspacePath?: string | null, vaultId?: string | null) {
@@ -183,6 +211,7 @@ export class VaultIndexer {
     const schemaVersionPath = path.join(baseStorePath, SCHEMA_VERSION_FILE_NAME);
 
     // Ensure the storage directory exists
+    getSafeFilePath(storageParent, path.relative(storageParent, baseStorePath));
     await fs.mkdir(baseStorePath, { recursive: true });
     
     return { dbPath, hashPath, lockPath, metadataPath, schemaVersionPath };
@@ -358,7 +387,8 @@ export class VaultIndexer {
   }
 
   private async listMarkdownFiles(vaultPath: string): Promise<string[]> {
-    return glob('**/*.md', { cwd: vaultPath, absolute: true, follow: true });
+    const files = await glob('**/*.md', { cwd: vaultPath, absolute: true, follow: true, dot: false, nocase: false, nodir: true });
+    return files.filter(file => isIndexableNotePath(path.relative(vaultPath, file)));
   }
 
   private filterIndexableMarkdownFiles(vaultPath: string, discoveredFiles: string[]): string[] {
@@ -420,12 +450,12 @@ export class VaultIndexer {
   // stats) so our own note creations do not raise false stale notices; the
   // residual blind spot is an external deletion or timestamp-preserving sync
   // landing between full indexes, which the next indexVault reconciles.
-  private async mergeIndexMetadataForFile(metadataPath: string, vaultPath: string, absoluteFilePath: string) {
+  private async mergeIndexMetadataForFile(metadataPath: string, vaultPath: string, absoluteFilePath: string | null) {
     const previous = await this.readIndexMetadata(metadataPath);
     if (!previous) return; // stays missing until the next full index
     const [files, fileStat] = await Promise.all([
       this.listMarkdownFiles(vaultPath),
-      fs.stat(absoluteFilePath).catch(() => null),
+      absoluteFilePath ? fs.stat(absoluteFilePath).catch(() => null) : null,
     ]);
     await this.writeIndexMetadata(metadataPath, {
       fileCount: files.length,
@@ -473,13 +503,21 @@ export class VaultIndexer {
       return now - stat.mtimeMs > 5000;
     }
     const createdAt = Number.isFinite(info.createdAt) ? Number(info.createdAt) : stat.mtimeMs;
-    if (now - createdAt > staleMs) return true;
     // A pid recorded on another machine (shared or synced storage) says
     // nothing about a local process; only trust liveness for locks created
-    // on this host and fall back to the age check otherwise.
+    // on this host. Age is only a fallback for legacy locks without a PID.
     const sameHost = !info.hostname || info.hostname === os.hostname();
-    if (sameHost && typeof info.pid === 'number' && !this.isPidRunning(info.pid)) return true;
-    return false;
+    if (sameHost && typeof info.pid === 'number') {
+      if (!this.isPidRunning(info.pid)) return true;
+      if (typeof info.processStartIdentity === 'string') {
+        const currentIdentity = await getProcessStartIdentity(info.pid);
+        if (currentIdentity !== null) return currentIdentity !== info.processStartIdentity;
+      }
+      return false;
+    }
+    // Never steal a remote host's lock: age cannot prove that its owner died.
+    if (!sameHost) return false;
+    return now - createdAt > staleMs;
   }
 
   private async acquireIndexLock(lockPath: string): Promise<() => Promise<void>> {
@@ -493,6 +531,7 @@ export class VaultIndexer {
       createdAt: startedAt,
       token,
       hostname: os.hostname(),
+      processStartIdentity: await getProcessStartIdentity(process.pid) ?? undefined,
     };
 
     while (true) {
@@ -643,15 +682,50 @@ export class VaultIndexer {
     return { success: true, chunks: chunks.length, contentHash };
   }
 
+  // Called with both locks held. Skipped writes can clean old pollution without
+  // creating a database or loading the embedding model.
+  private async removeExcludedPaths(
+    vaultPath: string, paths: string[], workspacePath?: string | null, vaultId?: string | null,
+  ): Promise<IndexResult> {
+    const { dbPath, hashPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+    const exists = await fs.stat(dbPath).then(() => true).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    });
+    if (exists) {
+      const db = await this.getDb(vaultPath, workspacePath, vaultId);
+      if (await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) return this.fullReindexRequiredResult();
+      if ((await db.tableNames()).includes(NOTES_TABLE_NAME)) {
+        const table = await db.openTable(NOTES_TABLE_NAME);
+        try { await this.deleteRowsForPaths(table, paths); } finally { table.close(); }
+      }
+    }
+    let hashes: Record<string, string>;
+    try {
+      hashes = JSON.parse(await fs.readFile(hashPath, 'utf8'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { success: true, chunks: 0, message: 'File excluded from the markdown index.' };
+      }
+      throw error;
+    }
+    for (const p of paths) delete hashes[p];
+    await this.writeJsonAtomic(hashPath, hashes);
+    return { success: true, chunks: 0, message: 'File excluded from the markdown index.' };
+  }
+
   public async indexFile(vaultPath: string, relativePath: string, workspacePath?: string | null, vaultId?: string | null): Promise<IndexResult> {
     const release = await this.acquireLock();
     let releaseIndexLock: (() => Promise<void>) | null = null;
     try {
       const normalizedPath = this.validatePath(relativePath);
+      const filePath = getSafeFilePath(vaultPath, normalizedPath);
       const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
       releaseIndexLock = await this.acquireIndexLock(lockPath);
+      if (!isIndexableNotePath(normalizedPath)) {
+        return await this.removeExcludedPaths(vaultPath, [normalizedPath], workspacePath, vaultId);
+      }
       const embedder = Embedder.getInstance();
-      const filePath = getSafeFilePath(vaultPath, relativePath);
       const db = await this.getDb(vaultPath, workspacePath, vaultId);
       const tableNames = await db.tableNames();
 
@@ -676,12 +750,11 @@ export class VaultIndexer {
       const result = await this.indexNoteIntoTable(table, embedder, vaultPath, normalizedPath);
       if (!result.success) return result;
 
-      await table.optimize();
+      // Hashes track successfully processed notes, including notes with no
+      // chunks. Their membership must still match the freshness metadata.
+      hashes[normalizedPath] = result.contentHash!;
       if (result.chunks && result.chunks > 0) {
-        hashes[normalizedPath] = result.contentHash!;
         console.error(`Indexed ${result.chunks} chunks for ${relativePath}.`);
-      } else {
-        delete hashes[normalizedPath];
       }
       await this.writeJsonAtomic(hashPath, hashes);
       await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
@@ -697,7 +770,15 @@ export class VaultIndexer {
     }
   }
 
-  public async indexVault(vaultPath: string, force: boolean = false, workspacePath?: string | null, vaultId?: string | null): Promise<IndexResult> {
+  // Call only while holding the in-process and per-vault index locks.
+  private async maintainTable(table: lancedb.Table): Promise<void> {
+    await table.optimize({
+      cleanupOlderThan: new Date(Date.now() - INDEX_RETENTION_DAYS * 86400000),
+      deleteUnverified: false,
+    });
+  }
+
+  public async indexVault(vaultPath: string, force: boolean = false, workspacePath?: string | null, vaultId?: string | null, maintenance: boolean = false): Promise<IndexResult> {
     const release = await this.acquireLock();
     let releaseIndexLock: (() => Promise<void>) | null = null;
     try {
@@ -717,19 +798,22 @@ export class VaultIndexer {
 
       // Load previous file hashes for incremental indexing
       let previousHashes: Record<string, string> = {};
+      let hasHashFile = false;
       if (!force) {
         try {
           previousHashes = JSON.parse(await fs.readFile(hashPath, 'utf-8'));
+          hasHashFile = true;
         } catch { /* no previous hashes — will do full index */ }
       }
 
       const tableNames = await db.tableNames();
       const tableExists = tableNames.includes(NOTES_TABLE_NAME);
-      const hasPreviousHashes = Object.keys(previousHashes).length > 0;
       if (tableExists && !force && await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
         return this.fullReindexRequiredResult();
       }
-      const canIncremental = tableExists && hasPreviousHashes && !force;
+      // An empty hash map is valid for an empty vault. Rebuilding it on every
+      // session start would also run unnecessary maintenance each time.
+      const canIncremental = tableExists && hasHashFile && !force;
       const currentHashes: Record<string, string> = canIncremental ? { ...previousHashes } : {};
 
       // Determine deleted files (in previous hashes but not in current file set)
@@ -943,12 +1027,20 @@ export class VaultIndexer {
 
       if (canIncremental && changedPaths.length === 0 && deletedPaths.length === 0 && failedFiles === 0) {
         console.error('Index is up to date, no changes detected.');
-        await this.writeJsonAtomic(hashPath, currentHashes);
-        await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
-        return { success: true, chunks: 0, message: 'Index up to date, no changes detected.' };
+        if (maintenance) await this.maintainTable(table);
+        // A new indexedAt timestamp would invalidate an otherwise identical
+        // export. Refresh metadata only to repair it or record changed file
+        // stats, such as a timestamp-only touch that this scan reconciled.
+        const metadata = await this.readIndexMetadata(metadataPath);
+        if (!metadata || !Number.isFinite(metadata.indexedAt) ||
+            metadata.fileCount !== indexStartSnapshot.fileCount ||
+            metadata.latestMtimeMs !== indexStartSnapshot.latestMtimeMs) {
+          await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
+        }
+        return { success: true, chunks: 0, message: maintenance ? 'Index up to date. Maintenance completed.' : 'Index up to date, no changes detected.', maintenancePerformed: maintenance };
       }
 
-      await table.optimize();
+      await this.maintainTable(table);
 
       // Always persist the hashes: they contain exactly the files that were
       // fully indexed, so failed files are retried on the next run instead of
@@ -972,7 +1064,7 @@ export class VaultIndexer {
       } else {
         console.error(`Indexed ${indexedChunks} chunks.`);
       }
-      return { success: true, chunks: indexedChunks };
+      return { success: true, chunks: indexedChunks, maintenancePerformed: true };
     } finally {
       if (releaseIndexLock) {
         await releaseIndexLock();
@@ -993,10 +1085,19 @@ export class VaultIndexer {
     try {
       const sourcePath = this.validatePath(sourceRelativePath);
       const destPath = this.validatePath(destRelativePath);
+      getSafeFilePath(vaultPath, sourcePath);
+      const filePath = getSafeFilePath(vaultPath, destPath);
+      const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];
       const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
       releaseIndexLock = await this.acquireIndexLock(lockPath);
+      if (!isIndexableNotePath(destPath)) {
+        const result = await this.removeExcludedPaths(vaultPath, pathsToDelete, workspacePath, vaultId);
+        if (result.success && isIndexableNotePath(sourcePath)) {
+          await this.mergeIndexMetadataForFile(metadataPath, vaultPath, null);
+        }
+        return result;
+      }
       const embedder = Embedder.getInstance();
-      const filePath = getSafeFilePath(vaultPath, destRelativePath);
       const db = await this.getDb(vaultPath, workspacePath, vaultId);
       const tableNames = await db.tableNames();
 
@@ -1017,11 +1118,9 @@ export class VaultIndexer {
       }
       await this.ensureFtsIndex(table);
 
-      const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];
       const result = await this.indexNoteIntoTable(table, embedder, vaultPath, destPath, pathsToDelete);
       if (!result.success) return result;
 
-      await table.optimize();
       delete hashes[sourcePath];
       if (result.contentHash) {
         hashes[destPath] = result.contentHash;
@@ -1067,6 +1166,32 @@ export class VaultIndexer {
     // checkout, sync rollbacks) are invisible to this heuristic; a forced
     // obsidian_rag_index run is the recovery.
     return { stale: false };
+  }
+
+  public async prepareIndexSnapshot(vaultPath: string, workspacePath?: string | null, vaultId?: string | null): Promise<SnapshotResult> {
+    const waitMs = Math.max(0, getFirstNumericEnv(['OBSIDIAN_INDEX_LOCK_WAIT_MS', 'CODEX_OBSIDIAN_INDEX_LOCK_WAIT_MS', 'GEMINI_OBSIDIAN_INDEX_LOCK_WAIT_MS'], 30000));
+    const release = await this.acquireLock(waitMs);
+    let releaseIndexLock: (() => Promise<void>) | undefined;
+    try {
+      const paths = await this.getPaths(vaultPath, workspacePath, vaultId);
+      const basePath = path.dirname(paths.dbPath);
+      releaseIndexLock = await this.acquireIndexLock(paths.lockPath);
+      return await prepareSnapshot(basePath, NOTES_TABLE_SCHEMA, NOTES_TABLE_SCHEMA_VERSION, async (hashes) => {
+        const files = this.filterIndexableMarkdownFiles(vaultPath, await this.listMarkdownFiles(vaultPath));
+        if (files.length !== Object.keys(hashes).length) {
+          throw new Error('Index is stale: note membership changed. Run obsidian_rag_index before preparing a snapshot.');
+        }
+        for (const file of files) {
+          const relative = path.relative(vaultPath, file).replace(/\\/g, '/');
+          const content = await fs.readFile(getSafeFilePath(vaultPath, relative), 'utf8');
+          if (hashes[relative] !== md5(content)) {
+            throw new Error(`Index is stale: ${relative} changed. Run obsidian_rag_index before preparing a snapshot.`);
+          }
+        }
+      });
+    } finally {
+      try { await releaseIndexLock?.(); } finally { release(); }
+    }
   }
 
   public async search(
