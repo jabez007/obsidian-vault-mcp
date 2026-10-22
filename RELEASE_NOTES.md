@@ -1,3 +1,41 @@
+# Release v2.2.0
+
+## Summary
+
+Version 2.2.0 adds an optional per-vault ignore file for discovery and search. The index now records which rules built it.
+
+## Highlights
+
+- Exclude notes and folders from default discovery and RAG search with an optional `.obsidian-mcpignore` file at the vault root. Rules use gitignore syntax and apply to note listing, keyword search, backlinks, broken links, indexing, and snapshot preparation. Explicit reads and edits by path still work.
+- `obsidian_rag_query` and `obsidian_prepare_index_snapshot` return an error after the rules change until a whole-vault scan reconciles the index. Newly ignored notes can't appear in query results or exports in the meantime.
+- Check staged ignore rules before sharing an index with the new `rules_text` argument to `obsidian_prepare_index_snapshot`.
+- The index records notes whose updates were interrupted or failed. They produce a stale-index notice, and the next scan re-embeds only those notes.
+- `obsidian_get_broken_links` resolves full-path links such as `[[folder/note]]`.
+
+## Upgrade
+
+This release keeps the version 2 tool API and the version 3 index schema. No full rebuild is needed. Existing indexes need one normal vault scan before `obsidian_rag_query` works again, and the scan reuses unchanged embeddings. The Claude Code plugin runs this scan at session start. On other hosts, run:
+
+```sh
+npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index
+```
+
+Snapshots prepared by 2.1.0 have no rule metadata. Prepare a new snapshot after the scan before sharing the index.
+
+These changes can affect scripts:
+
+- `obsidian_rag_index` exits nonzero from the CLI and sets `isError: true` over MCP when it reports `success: false`.
+- CLI options that take a value reject a missing value. Use `--key=value` for values that are empty or begin with `--`.
+- A failed reindex after a note write or move adds a warning to the tool result. A move no longer reports an error after the file has moved.
+- Queries wait for indexing and snapshot preparation to release the cross-process index lock, up to `OBSIDIAN_INDEX_LOCK_WAIT_MS`.
+
+## Known issues
+
+- Ignore rules match case-sensitively on every platform. On case-insensitive volumes, the default on macOS and Windows, two cases are untested. A note tool may be able to create the ignore file using different letter case. An explicit write to an ignored folder through a differently cased path may index that note until the next full scan.
+- Ignore rules don't control access by explicit path, Git tracking, or shell access. They don't remove content from earlier snapshots or from Git history.
+
+---
+
 # Release v2.1.0
 
 ## Summary
