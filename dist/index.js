@@ -7063,6 +7063,10 @@ var require_ignore = __commonJS({
       return value;
     };
     var RETURN_FALSE = () => false;
+    var cleanRangeBackSlash = (slashes) => {
+      const { length } = slashes;
+      return slashes.slice(0, length - length % 2);
+    };
     var POSIX_CLASSES = {
       alnum: "0-9A-Za-z",
       alpha: "A-Za-z",
@@ -7133,11 +7137,11 @@ var require_ignore = __commonJS({
             return null;
           }
           if (end > nameStart && pattern[end - 1] === ":") {
-            const name = pattern.slice(nameStart, end - 1);
-            if (!Object.prototype.hasOwnProperty.call(POSIX_CLASSES, name)) {
+            const expanded = POSIX_CLASSES[pattern.slice(nameStart, end - 1)];
+            if (expanded === UNDEFINED) {
               return null;
             }
-            body += POSIX_CLASSES[name];
+            body += expanded;
             prev = EMPTY;
             index = end;
           } else {
@@ -7166,7 +7170,6 @@ var require_ignore = __commonJS({
     );
     var TRAILING_WILDCARD = "\uE000";
     var TRAILING_DOUBLESTAR = "\uE001";
-    var isReserved = (char) => char === PLACEHOLDER || char === TRAILING_WILDCARD || char === TRAILING_DOUBLESTAR;
     var extractBrackets = (pattern) => {
       const sources = [];
       const hold = (source) => `${PLACEHOLDER}${sources.push(source) - 1}${PLACEHOLDER}`;
@@ -7179,16 +7182,16 @@ var require_ignore = __commonJS({
           const escaped = pattern[index + 1];
           if (escaped === UNDEFINED || escaped === SLASH && index + 2 === length) {
             out += hold(NEVER_MATCH);
-          } else if (escaped === "*" || escaped === "[" || escaped === SPACE) {
+          } else if (escaped === "*" || escaped === "[" || escaped === SPACE || escaped === ESCAPE) {
             out += pattern.slice(index, index + 2);
           } else {
             out += hold(
-              REGEX_LITERAL_SPECIAL.test(escaped) ? ESCAPE + escaped : isReserved(escaped) ? `[${escaped}]` : escaped
+              REGEX_LITERAL_SPECIAL.test(escaped) ? ESCAPE + escaped : escaped
             );
           }
           index += 2;
-        } else if (isReserved(char)) {
-          out += hold(`[${char}]`);
+        } else if (char === PLACEHOLDER) {
+          out += hold(`[${PLACEHOLDER}]`);
           index++;
         } else if (char === "[") {
           const scanned = scanBracket(pattern, index);
@@ -7323,17 +7326,19 @@ var require_ignore = __commonJS({
       // trailing wildcard, held apart from a literal star
       [
         // The step above leaves a trailing `*` alone, so a single `\*` is all that
-        //   can be left at the end here, and what stands in front of it says which
-        //   kind it is. A wildcard arrives as the escaper wrote it, `\*` with
-        //   nothing before it; a literal arrives as the user's own escape, which
-        //   the escaper doubled, and then the star's own -- `\\` and then `\*`.
-        //   There is no third case: every backslash still reaching the chain is
-        //   one `\*`, `\[` or `\ ` carries itself, and each is followed by its
-        //   own character, so a longer run can never form. This runs while the
-        //   two are still distinct, before the unescape steps below collapse the
-        //   literal onto the very `\*` a wildcard leaves behind.
+        //   can be left at the end here. Whether it is a wildcard or a literal
+        //   turns on the backslashes the user put in front of it: the escaper has
+        //   since doubled every one, so what stands here is those `2N` doubled
+        //   backslashes and then the star's own escape. An even number of the
+        //   original `N` leaves the star unescaped -- a wildcard -- and an odd
+        //   number escapes it -- a literal. This runs while the two are still
+        //   distinct, before the unescape steps below collapse the literal onto
+        //   the very `\*` a wildcard leaves behind.
         /(^|[^\\])((?:\\\\)*)\\\*$/,
-        (match, p1, p2) => p2 === EMPTY ? p1 + TRAILING_WILDCARD : match,
+        (match, p1, p2) => (
+          // `p2` holds the doubled user backslashes; half of them is `N`.
+          p2.length / 2 % 2 === 0 ? p1 + p2 + TRAILING_WILDCARD : match
+        ),
         "*"
       ],
       [
@@ -7354,11 +7359,10 @@ var require_ignore = __commonJS({
         // Every real bracket expression -- POSIX classes included -- has already
         //   been held aside by `extractBrackets`, so the only `[` left in the
         //   pattern is an escaped, literal one.
-        // A backslash could only stand at the end of the range if it quoted the
-        //   `]`, and `\]` is held aside long before this.
-        /\\\[([^\]/]*?)($|\])/g,
-        // '\\[bar]' -> '\\\\[bar]'
-        (match, range, close) => `\\[${range}${close}`,
+        // `\` is escaped by step 3
+        /\\\[([^\]/]*?)(\\*)($|\])/g,
+        // '\\[bar]' -> '\\\\[bar\\]'
+        (match, range, endEscape, close) => `\\[${range}${cleanRangeBackSlash(endEscape)}${close}`,
         "["
       ],
       // ending
@@ -11634,7 +11638,7 @@ var init_note_policy = __esm({
     init_utils();
     IGNORE_FILE_NAME = ".obsidian-mcpignore";
     INDEX_METADATA_VERSION = 2;
-    RULES_VERSION = 1;
+    RULES_VERSION = 2;
     NotePolicyError = class extends Error {
       constructor(message, code = "INVALID_NOTE_POLICY") {
         super(message);

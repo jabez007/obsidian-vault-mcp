@@ -9,7 +9,7 @@ import { getSafeFilePath, resolveRealPathAllowMissing } from './utils.js';
 export const IGNORE_FILE_NAME = '.obsidian-mcpignore';
 export const INDEX_METADATA_VERSION = 2;
 // Change this when built-in exclusions, normalization, or matching semantics change.
-const RULES_VERSION = 1;
+const RULES_VERSION = 2; // Case-sensitive ignore@7.0.12 matching.
 
 export class NotePolicyError extends Error {
   constructor(message: string, public readonly code = 'INVALID_NOTE_POLICY') {

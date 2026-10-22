@@ -63,7 +63,7 @@
     "@huggingface/transformers": "^4.2.0",
     "@lancedb/lancedb": "0.27.2",
     "apache-arrow": "^18.1.0",
-    "ignore": "7.0.13",
+    "ignore": "7.0.12",
     "moment": "^2.30.1"
   },
   "devDependencies": {
