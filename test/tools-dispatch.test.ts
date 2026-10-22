@@ -110,6 +110,25 @@ describe('tool registry dispatch', () => {
     expect(indexer.indexVault).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['', '--drafts/\n/templates/', '--drafts=unreviewed/\nnotes=archive.md'])(
+    'passes inline staged rule text verbatim: %j', async rules => {
+      const { context, indexer, vaultPath } = await createFakeContext();
+      const result = await dispatchCliTool(
+        ['obsidian_prepare_index_snapshot', `--rules_text=${rules}`], context, async () => '',
+      );
+      expect(result.exitCode).toBe(0);
+      expect(indexer.prepareIndexSnapshot).toHaveBeenCalledWith(vaultPath, null, null, rules);
+    });
+
+  it.each([{ args: ['--rules_text'] }, { args: ['--rules_text', '--vault_path', '/another-vault'] }])(
+    'rejects a missing rules_text value before snapshot preparation: $args', async ({ args }) => {
+      const { context, indexer } = await createFakeContext();
+      const result = await dispatchCliTool(['obsidian_prepare_index_snapshot', ...args], context, async () => '');
+      expect(result.exitCode).toBe(1);
+      expect(result.output).toContain('--rules_text requires a value');
+      expect(indexer.prepareIndexSnapshot).not.toHaveBeenCalled();
+    });
+
   it('rejects maintenance with a single file before indexing', async () => {
     const { context, indexer } = await createFakeContext();
     await expect(dispatchMcpTool('obsidian_rag_index', { maintenance: true, file_path: 'note.md' }, context))

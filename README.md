@@ -253,14 +253,19 @@ You can omit these arguments to use the configured vault, workspace, and vault I
 
 The command returns JSON with `success`, `snapshotPath`, `sourceFingerprint`, `rulesFingerprint`, `sourceVersion`, and `reused`. The output directory is `<vault-storage>/snapshots/<sourceFingerprint>/`. It contains `lancedb/`, `file-hashes.json`, `schema-version.json`, `index-metadata.json`, and `snapshot.json`. Snapshot manifest policy version 2 records `rulesFingerprint`, payload file hashes, and validation results. `sourceFingerprint` includes the rules fingerprint. Preparation checks every exported row against the current rules. Locks and unfinished metadata writes are excluded.
 
-The optional `rules_text` argument checks a caller-supplied ruleset against both the current vault rules and the reconciled index. A Git hook can pass the staged version without asking MCP to run Git:
+The optional `rules_text` argument checks a caller-supplied ruleset against both the current vault rules and the reconciled index. Run the hook from the vault root, including when the vault is a repository subfolder. Replace the server path below with your built checkout:
 
 ```sh
-staged_rules=$(git show :.obsidian-mcpignore) || exit 1
-node dist/index.js obsidian_prepare_index_snapshot --rules_text "$staged_rules"
+staged_entry=$(git ls-files --stage -- .obsidian-mcpignore) || exit 1
+if [ -n "$staged_entry" ]; then
+	staged_rules=$(git show :./.obsidian-mcpignore) || exit 1
+else
+	staged_rules=
+fi
+node /absolute/path/to/obsidian-vault-mcp/dist/index.js obsidian_prepare_index_snapshot --rules_text="$staged_rules"
 ```
 
-If the ignore file is absent from the Git index, the hook can pass an empty string instead. The hook must distinguish absence from a failed Git command. Unstaged or partly staged rule changes that alter the fingerprint cause preparation to fail. Comments and line-ending differences do not change the fingerprint. Existing exports with an older manifest policy version must be regenerated from a reconciled index.
+The index lookup returns an empty string when the ignore file is not staged, and Git errors stop the hook. `:./` resolves the staged path relative to the vault root. The `--rules_text=...` form preserves empty text and rules beginning with `--`; CLI options that require values reject missing values. Unstaged or partly staged rule changes that alter the fingerprint cause preparation to fail. Comments and line-ending differences do not change the fingerprint. Existing exports with an older manifest policy version must be regenerated from a reconciled index.
 
 Preparation holds the shared index lock while it copies and validates the index. It maintains the private copy and publishes the final directory only after validation succeeds. Queries wait for preparation to release the lock. Preparation does not prune the live database. A live local process's lock never expires solely because it is old. On Linux, the lock records the boot ID and process start time so a reused PID cannot retain a dead owner's lock. When this identity is unavailable, including on other platforms and in older locks, the existing process-liveness check remains in effect. A lock from another host requires explicit resolution after confirming that its owner has stopped. `OBSIDIAN_INDEX_LOCK_WAIT_MS` controls the wait, with a default of 30 seconds.
 

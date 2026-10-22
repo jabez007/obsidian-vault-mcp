@@ -461,6 +461,36 @@ describe('vault ignore policy', () => {
       .rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('obsidian_rag_index') });
   });
 
+  it.each([
+    { folder: '.', rules: null },
+    { folder: 'aether-labyrinth/vaults/jabez', rules: null },
+    { folder: 'aether-labyrinth/vaults/jabez', rules: '--drafts/\nnotes=archive.md\n' },
+  ])('runs the documented staged-rule hook from $folder with rules $rules', async ({ folder, rules }) => {
+    const run = promisify(execFile);
+    await run('git', ['init', '--quiet', tmp]);
+    vault = path.join(tmp, folder);
+    await fs.mkdir(vault, { recursive: true });
+    if (folder !== '.') {
+      await fs.writeFile(path.join(tmp, IGNORE_FILE_NAME), '/repository-root-only/');
+      await run('git', ['-C', tmp, 'add', '--', IGNORE_FILE_NAME]);
+    }
+    if (rules !== null) {
+      await write(IGNORE_FILE_NAME, rules);
+      await run('git', ['-C', vault, 'add', '--', IGNORE_FILE_NAME]);
+    }
+    await write('note.md'); await scan();
+    const readme = await fs.readFile(path.resolve('README.md'), 'utf8');
+    const example = readme.slice(readme.indexOf('The optional `rules_text`')).match(/```sh\n([\s\S]*?)```/)?.[1];
+    expect(example).toBeTruthy();
+    const script = example!.replace('/absolute/path/to/obsidian-vault-mcp/dist/index.js', '"$OBSIDIAN_TEST_CLI"');
+    const options = { cwd: vault, env: { ...env(), OBSIDIAN_TEST_CLI: path.resolve('dist/index.js') } };
+    const result = await run('sh', ['-c', script], options);
+    expect(JSON.parse(result.stdout)).toMatchObject({ success: true, rulesFingerprint: new NotePolicy(rules ?? '').fingerprint });
+    // A broken Git index must fail rather than being treated as an absent file.
+    await fs.writeFile(path.join(tmp, '.git', 'index'), 'invalid Git index');
+    await expect(run('sh', ['-c', script], options)).rejects.toMatchObject({ code: 1 });
+  });
+
   it('recovers only an interrupted write path after a real indexing process is killed', async () => {
     for (const name of ['note.md', 'other.md', 'third.md']) await write(name);
     await scan();

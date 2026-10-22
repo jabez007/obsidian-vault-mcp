@@ -79,11 +79,20 @@ export function parseCliToolArgs(tool: ObsidianTool, rawArgs: string[]) {
         const current = rawArgs[i];
         if (!current?.startsWith("--")) continue;
 
-        const key = current.substring(2);
+        const equalsIndex = current.indexOf("=");
+        const key = current.substring(2, equalsIndex === -1 ? undefined : equalsIndex);
+        if (equalsIndex !== -1) {
+            parsedArgs[key] = parseCliValue(tool, key, current.substring(equalsIndex + 1));
+            continue;
+        }
         if (i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith("--")) {
             parsedArgs[key] = parseCliValue(tool, key, rawArgs[i + 1]);
             i++;
         } else {
+            const propertyType = getPropertyType(tool, key);
+            if (propertyType && propertyType !== "boolean" && !EXTRA_BOOLEAN_CLI_KEYS.has(key)) {
+                throw new Error(`--${key} requires a value. Use --${key}=VALUE for values beginning with --.`);
+            }
             parsedArgs[key] = parseCliValue(tool, key, true);
         }
     }
