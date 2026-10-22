@@ -243,11 +243,13 @@ describe('vault ignore policy', () => {
     expect(await resolveStoredNotePath(root, 'drafts/Secret.md', fileSystem)).toBe('drafts/Secret.md');
   });
 
-  it('keeps the addressed spelling of symlinks and of distinct entries on a case-sensitive volume', async () => {
+  it('keeps the addressed spelling of symlinks and of distinct entries', async () => {
     await write('drafts/target.md'); await write('Drafts/target.md');
+    // A case-insensitive volume stores one drafts directory, so Drafts resolves to it.
+    const distinctEntries = (await fs.readdir(vault)).filter(name => name.toLowerCase() === 'drafts').length === 2;
     await fs.symlink(path.join(vault, 'drafts'), path.join(vault, 'alias'));
     expect(await resolveStoredNotePath(vault, 'alias/target.md')).toBe('alias/target.md');
-    expect(await resolveStoredNotePath(vault, 'Drafts/target.md')).toBe('Drafts/target.md');
+    expect(await resolveStoredNotePath(vault, 'Drafts/target.md')).toBe(distinctEntries ? 'Drafts/target.md' : 'drafts/target.md');
     expect(await resolveStoredNotePath(vault, 'drafts/new.md')).toBe('drafts/new.md');
   });
 

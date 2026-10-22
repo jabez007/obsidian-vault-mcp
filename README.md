@@ -111,7 +111,7 @@ npm run build
 node dist/index.js
 ```
 
-To try the Claude Code plugin from a checkout, run `claude plugin validate .` and start Claude Code with `claude --plugin-dir .`. The session hook uses the checkout's build when `node_modules/` exists. To point the hook at another build, set:
+To try the Claude Code plugin from a checkout, run `claude plugin validate .` and start Claude Code with `claude --plugin-dir .`. The session hook uses the checkout's build when `node_modules/@lancedb/lancedb` exists, and otherwise runs the published npm package. To point the hook at another build, set:
 
 ```sh
 export OBSIDIAN_MCP_SERVER_COMMAND="node /absolute/path/to/obsidian-vault-mcp/dist/index.js"
