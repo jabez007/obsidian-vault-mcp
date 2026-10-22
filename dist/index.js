@@ -34489,6 +34489,9 @@ async function readMetadata(basePath, schemaVersion) {
   if (schema?.notesTableSchemaVersion !== schemaVersion) {
     throw new Error("Incompatible index schema. Run obsidian_rag_index with force_reindex=true before preparing a snapshot.");
   }
+  if ((metadata?.pendingPaths?.length ?? 0) > 0 || (metadata?.failedPaths?.length ?? 0) > 0) {
+    throw new Error("Index is stale: note updates are incomplete or failed. Run obsidian_rag_index before preparing a snapshot.");
+  }
   if (!hashes || typeof hashes !== "object" || Array.isArray(hashes) || Object.values(hashes).some((hash2) => typeof hash2 !== "string" || !/^[a-f0-9]{32}$/.test(hash2))) {
     throw new Error("Invalid file-hashes.json. Run obsidian_rag_index before preparing a snapshot.");
   }
@@ -35053,13 +35056,6 @@ var init_store = __esm({
           return null;
         }
       }
-      async writeIndexMetadata(metadataPath, snapshot) {
-        await this.writeJsonAtomic(metadataPath, {
-          metadataVersion: INDEX_METADATA_VERSION,
-          indexedAt: Date.now(),
-          ...snapshot
-        });
-      }
       // Merge a single indexed file into the freshness metadata. Only the file we
       // just indexed may advance the mtime watermark — recomputing it from a full
       // vault snapshot would absorb the mtimes of files edited outside MCP and
@@ -35074,16 +35070,16 @@ var init_store = __esm({
           this.listMarkdownFiles(vaultPath, policy),
           absoluteFilePath ? fs9.stat(absoluteFilePath).catch(() => null) : null
         ]);
-        await this.writeIndexMetadata(metadataPath, {
-          rulesFingerprint: previous.rulesFingerprint,
-          policyReconciled: previous.policyReconciled,
+        await this.writeJsonAtomic(metadataPath, {
+          ...previous,
+          indexedAt: Date.now(),
           fileCount: files.length,
           latestMtimeMs: Math.max(previous.latestMtimeMs, fileStat?.mtimeMs ?? 0)
         });
       }
-      async markPolicyDirty(metadataPath, policy, always = false) {
+      async markPolicyDirty(metadataPath, policy) {
         const metadata = await this.readIndexMetadata(metadataPath);
-        if (always || metadata?.metadataVersion !== INDEX_METADATA_VERSION || metadata.rulesFingerprint !== policy.fingerprint || metadata.policyReconciled !== true) {
+        if (metadata?.metadataVersion !== INDEX_METADATA_VERSION || metadata.rulesFingerprint !== policy.fingerprint || metadata.policyReconciled !== true) {
           await this.writeJsonAtomic(metadataPath, {
             indexedAt: 0,
             fileCount: 0,
@@ -35093,21 +35089,44 @@ var init_store = __esm({
           });
         }
       }
+      // Caller holds the index locks. Persist intent before changing rows, and
+      // retain it until the matching file hashes have reached disk.
+      async beginIndexWrite(metadataPath, paths) {
+        if (paths.length === 0) return;
+        const metadata = await this.readIndexMetadata(metadataPath);
+        await this.writeJsonAtomic(metadataPath, {
+          ...metadata ?? { indexedAt: 0, fileCount: 0, latestMtimeMs: 0 },
+          pendingPaths: [.../* @__PURE__ */ new Set([...metadata?.pendingPaths ?? [], ...paths])].sort()
+        });
+      }
+      async finishIndexWrite(metadataPath, paths) {
+        const metadata = await this.readIndexMetadata(metadataPath);
+        if (!metadata) return;
+        const completed = new Set(paths);
+        await this.writeJsonAtomic(metadataPath, {
+          ...metadata,
+          pendingPaths: (metadata.pendingPaths ?? []).filter((p) => !completed.has(p)),
+          failedPaths: (metadata.failedPaths ?? []).filter((p) => !completed.has(p))
+        });
+      }
+      async recordIndexFailure(metadataPath, paths) {
+        const metadata = await this.readIndexMetadata(metadataPath);
+        if (!metadata) return;
+        await this.writeJsonAtomic(metadataPath, {
+          ...metadata,
+          failedPaths: [.../* @__PURE__ */ new Set([...metadata.failedPaths ?? [], ...paths])].sort()
+        });
+      }
       async assertIndexPolicy(metadataPath, policy) {
         const metadata = await this.readIndexMetadata(metadataPath);
         if (metadata?.metadataVersion !== INDEX_METADATA_VERSION || metadata.rulesFingerprint !== policy.fingerprint || metadata.policyReconciled !== true) {
           throw new NotePolicyError("Index ignore rules are missing, changed, or incompletely reconciled. Run obsidian_rag_index on the whole vault before querying or exporting.", "INDEX_POLICY_MISMATCH");
         }
       }
-      async finishPolicyReconciliation(metadataPath, vaultPath, policy, metadata) {
-        try {
-          await policy.assertUnchanged(vaultPath);
-          await this.writeJsonAtomic(metadataPath, { ...metadata, metadataVersion: INDEX_METADATA_VERSION });
-          await policy.assertUnchanged(vaultPath);
-        } catch (error2) {
-          await this.markPolicyDirty(metadataPath, policy, true);
-          throw error2;
-        }
+      async publishIndexMetadata(metadataPath, vaultPath, policy, metadata) {
+        await policy.assertUnchanged(vaultPath);
+        await this.writeJsonAtomic(metadataPath, { ...metadata, metadataVersion: INDEX_METADATA_VERSION });
+        await policy.assertUnchanged(vaultPath);
       }
       parseIndexLock(raw) {
         if (raw === null) return null;
@@ -35251,13 +35270,14 @@ var init_store = __esm({
         const { textsToEmbed, chunkMetadata } = buildEmbeddingInputs(relativePath, body, chunkingOptions);
         return { contentHash, textsToEmbed, chunkMetadata };
       }
-      async indexNoteIntoTable(table, embedder, vaultPath, relativePath, pathsToDelete) {
+      async indexNoteIntoTable(table, embedder, vaultPath, relativePath, metadataPath, pathsToDelete) {
         const normalizedPath = this.validatePath(relativePath);
         const filePath = getSafeFilePath(vaultPath, normalizedPath);
         const content = await fs9.readFile(filePath, "utf-8");
         const { contentHash, textsToEmbed, chunkMetadata } = this.prepareNoteChunks(normalizedPath, content);
         const deleteTargets = pathsToDelete ?? [normalizedPath];
         if (textsToEmbed.length === 0) {
+          await this.beginIndexWrite(metadataPath, deleteTargets);
           await this.deleteRowsForPaths(table, deleteTargets);
           return {
             success: true,
@@ -35277,6 +35297,7 @@ var init_store = __esm({
             message: `Failed to embed all content for ${relativePath}: ${chunks.length}/${textsToEmbed.length} chunks embedded.`
           };
         }
+        await this.beginIndexWrite(metadataPath, deleteTargets);
         await this.deleteRowsForPaths(table, deleteTargets);
         await this.addNoteChunks(table, chunks);
         return { success: true, chunks: chunks.length, contentHash };
@@ -35284,7 +35305,7 @@ var init_store = __esm({
       // Called with both locks held. Skipped writes can clean old pollution without
       // creating a database or loading the embedding model.
       async removeExcludedPaths(vaultPath, paths, workspacePath, vaultId) {
-        const { dbPath, hashPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+        const { dbPath, hashPath, schemaVersionPath, metadataPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
         const exists2 = await fs9.stat(dbPath).then(() => true).catch((error2) => {
           if (error2.code === "ENOENT") return false;
           throw error2;
@@ -35294,6 +35315,7 @@ var init_store = __esm({
           if (await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) return this.fullReindexRequiredResult();
           if ((await db.tableNames()).includes(NOTES_TABLE_NAME)) {
             const table = await db.openTable(NOTES_TABLE_NAME);
+            await this.beginIndexWrite(metadataPath, paths);
             try {
               await this.deleteRowsForPaths(table, paths);
             } finally {
@@ -35306,17 +35328,20 @@ var init_store = __esm({
           hashes = JSON.parse(await fs9.readFile(hashPath, "utf8"));
         } catch (error2) {
           if (error2.code === "ENOENT") {
+            await this.finishIndexWrite(metadataPath, paths);
             return { success: true, chunks: 0, message: "File excluded from the markdown index." };
           }
           throw error2;
         }
         for (const p of paths) delete hashes[p];
         await this.writeJsonAtomic(hashPath, hashes);
+        await this.finishIndexWrite(metadataPath, paths);
         return { success: true, chunks: 0, message: "File excluded from the markdown index." };
       }
       async indexFile(vaultPath, relativePath, workspacePath, vaultId) {
         const release = await this.acquireLock();
         let releaseIndexLock = null;
+        let failureContext;
         try {
           const policy = await loadNotePolicy(vaultPath);
           const normalizedPath = this.validatePath(relativePath);
@@ -35344,17 +35369,23 @@ var init_store = __esm({
             await this.writeNotesSchemaVersion(schemaVersionPath);
           }
           await this.ensureFtsIndex(table);
-          const result = await this.indexNoteIntoTable(table, embedder, vaultPath, normalizedPath);
-          if (!result.success) return result;
+          failureContext = { metadataPath, paths: [normalizedPath] };
+          const result = await this.indexNoteIntoTable(table, embedder, vaultPath, normalizedPath, metadataPath);
+          if (!result.success) {
+            await this.recordIndexFailure(metadataPath, [normalizedPath]);
+            return result;
+          }
           hashes[normalizedPath] = result.contentHash;
           if (result.chunks && result.chunks > 0) {
             console.error(`Indexed ${result.chunks} chunks for ${relativePath}.`);
           }
           await this.writeJsonAtomic(hashPath, hashes);
+          await this.finishIndexWrite(metadataPath, [normalizedPath]);
           await policy.assertUnchanged(vaultPath);
           await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath, policy);
           return { success: true, chunks: result.chunks, message: result.message };
         } catch (err) {
+          if (failureContext) await this.recordIndexFailure(failureContext.metadataPath, failureContext.paths);
           console.error(`Failed to index file ${relativePath}:`, err);
           return { success: false, message: String(err) };
         } finally {
@@ -35384,6 +35415,7 @@ var init_store = __esm({
           const files = this.filterIndexableMarkdownFiles(vaultPath, discoveredFiles);
           const indexStartSnapshot = { ...await this.getVaultIndexSnapshotForFiles(discoveredFiles), rulesFingerprint: policy.fingerprint, policyReconciled: true };
           const previousMetadata = await this.readIndexMetadata(metadataPath);
+          const recoveringPaths = new Set(previousMetadata?.pendingPaths ?? []);
           console.error(`Found ${files.length} notes in ${vaultPath}`);
           let previousHashes = {};
           let hasHashFile = false;
@@ -35407,7 +35439,10 @@ var init_store = __esm({
           }
           const deletedPaths = canIncremental ? Object.keys(previousHashes).filter((p) => !existingRelativePaths.has(p)) : [];
           await policy.assertUnchanged(vaultPath);
-          await this.markPolicyDirty(metadataPath, policy, true);
+          await this.markPolicyDirty(metadataPath, policy);
+          if (!canIncremental && tableExists) {
+            await this.beginIndexWrite(metadataPath, [.../* @__PURE__ */ new Set([...Object.keys(previousHashes), ...existingRelativePaths])]);
+          }
           let table;
           if (canIncremental) {
             table = await db.openTable(NOTES_TABLE_NAME);
@@ -35417,6 +35452,32 @@ var init_store = __esm({
             }
             table = await this.createNotesTable(db);
             await this.writeNotesSchemaVersion(schemaVersionPath);
+          }
+          const rowPaths = await table.query().select(["path"]).toArray();
+          const removedPaths = [.../* @__PURE__ */ new Set([
+            ...deletedPaths,
+            ...rowPaths.map((row) => String(row.path)).filter((p) => !existingRelativePaths.has(p)),
+            ...[...recoveringPaths].filter((p) => !existingRelativePaths.has(p))
+          ])];
+          if (removedPaths.length > 0) {
+            await this.beginIndexWrite(metadataPath, removedPaths);
+            for (let i = 0; i < removedPaths.length; i += 100) {
+              await this.deleteRowsForPaths(table, removedPaths.slice(i, i + 100));
+            }
+            for (const p of removedPaths) delete currentHashes[p];
+            await this.writeJsonAtomic(hashPath, currentHashes);
+            await this.finishIndexWrite(metadataPath, removedPaths);
+          }
+          if (previousMetadata?.rulesFingerprint !== policy.fingerprint || previousMetadata?.policyReconciled !== true || previousMetadata?.metadataVersion !== INDEX_METADATA_VERSION) {
+            const state2 = await this.readIndexMetadata(metadataPath);
+            await this.publishIndexMetadata(metadataPath, vaultPath, policy, {
+              indexedAt: 0,
+              fileCount: 0,
+              latestMtimeMs: 0,
+              ...state2,
+              rulesFingerprint: policy.fingerprint,
+              policyReconciled: true
+            });
           }
           const batchSizeRaw = getFirstNumericEnv(["OBSIDIAN_EMBED_BATCH_SIZE", "CODEX_OBSIDIAN_EMBED_BATCH_SIZE", "GEMINI_OBSIDIAN_EMBED_BATCH_SIZE"], 48);
           const batchSize = Number.isFinite(batchSizeRaw) && batchSizeRaw > 0 ? Math.min(Math.floor(batchSizeRaw), 256) : 48;
@@ -35430,6 +35491,7 @@ var init_store = __esm({
           let filesRead = 0;
           let skippedFiles = 0;
           let failedFiles = 0;
+          const failedPaths = /* @__PURE__ */ new Set();
           const renderReadProgress = () => {
             if (files.length === 0) return;
             if (useProgressBar) {
@@ -35456,7 +35518,7 @@ var init_store = __esm({
                   const content = await fs9.readFile(filePath, "utf-8");
                   const relativePath = this.validatePath(path6.relative(vaultPath, filePath).replace(/\\/g, "/"));
                   const contentHash = (0, import_md52.default)(content);
-                  if (canIncremental && previousMetadata?.policyReconciled !== false && previousHashes[relativePath] === contentHash) {
+                  if (canIncremental && !recoveringPaths.has(relativePath) && previousHashes[relativePath] === contentHash) {
                     return "skipped";
                   }
                   const inputs = this.prepareNoteChunks(relativePath, content);
@@ -35469,6 +35531,7 @@ var init_store = __esm({
                   currentHashes[relativePath] = inputs.contentHash;
                   return "empty";
                 } catch (err) {
+                  failedPaths.add(path6.relative(vaultPath, filePath).replace(/\\/g, "/"));
                   console.error(`Failed to process file ${filePath}:`, err);
                   return "failed";
                 }
@@ -35494,15 +35557,17 @@ var init_store = __esm({
           } else {
             console.error(`Full index: ${allTexts.length} chunks from ${files.length} files`);
           }
+          await policy.assertUnchanged(vaultPath);
+          await this.beginIndexWrite(metadataPath, changedPaths);
           if (canIncremental) {
-            const rowPaths = await table.query().select(["path"]).toArray();
-            const orphanPaths = rowPaths.map((row) => String(row.path)).filter((p) => !existingRelativePaths.has(p));
-            const pathsToDelete = [.../* @__PURE__ */ new Set([...changedPaths, ...deletedPaths, ...orphanPaths])];
-            const DELETE_BATCH = 100;
-            for (let i = 0; i < pathsToDelete.length; i += DELETE_BATCH) {
-              await this.deleteRowsForPaths(table, pathsToDelete.slice(i, i + DELETE_BATCH));
+            for (let i = 0; i < changedPaths.length; i += 100) {
+              await this.deleteRowsForPaths(table, changedPaths.slice(i, i + 100));
             }
-            for (const p of deletedPaths) delete currentHashes[p];
+          }
+          const emptyPaths = changedPaths.filter((p) => !expectedChunkCounts[p]);
+          if (emptyPaths.length > 0) {
+            await this.writeJsonAtomic(hashPath, currentHashes);
+            await this.finishIndexWrite(metadataPath, emptyPaths);
           }
           let indexedChunks = 0;
           const persistedChunkCounts = {};
@@ -35534,12 +35599,18 @@ var init_store = __esm({
               if (chunks.length === 0) return;
               await this.addNoteChunks(table, chunks);
               indexedChunks += chunks.length;
+              const completed = [];
               for (const c of chunks) {
                 const p = c.path;
                 persistedChunkCounts[p] = (persistedChunkCounts[p] || 0) + 1;
                 if (persistedChunkCounts[p] === expectedChunkCounts[p] && changedHashes[p]) {
                   currentHashes[p] = changedHashes[p];
+                  completed.push(p);
                 }
+              }
+              if (completed.length > 0) {
+                await this.writeJsonAtomic(hashPath, currentHashes);
+                await this.finishIndexWrite(metadataPath, completed);
               }
             };
             const WRITE_ACCUMULATE = 5;
@@ -35568,23 +35639,37 @@ var init_store = __esm({
             }
           }
           for (const p of Object.keys(expectedChunkCounts)) {
-            if (persistedChunkCounts[p] !== expectedChunkCounts[p]) failedFiles++;
+            if (persistedChunkCounts[p] !== expectedChunkCounts[p]) {
+              failedFiles++;
+              failedPaths.add(p);
+            }
           }
           await policy.assertUnchanged(vaultPath);
+          const state = await this.readIndexMetadata(metadataPath);
+          const finalMetadata = {
+            ...indexStartSnapshot,
+            pendingPaths: state?.pendingPaths ?? [],
+            failedPaths: [...failedPaths].sort(),
+            indexedAt: Date.now()
+          };
           await this.ensureFtsIndex(table);
-          if (canIncremental && changedPaths.length === 0 && deletedPaths.length === 0 && failedFiles === 0) {
-            console.error("Index is up to date, no changes detected.");
+          if (canIncremental && changedPaths.length === 0 && removedPaths.length === 0) {
+            console.error("No index rows changed.");
             if (maintenance) await this.maintainTable(table);
             const metadata = previousMetadata;
-            if (!metadata || !Number.isFinite(metadata.indexedAt) || metadata.fileCount !== indexStartSnapshot.fileCount || metadata.latestMtimeMs !== indexStartSnapshot.latestMtimeMs || metadata.rulesFingerprint !== policy.fingerprint || metadata.policyReconciled !== true) {
-              await this.finishPolicyReconciliation(metadataPath, vaultPath, policy, { ...indexStartSnapshot, indexedAt: Date.now() });
+            if (!metadata || !Number.isFinite(metadata.indexedAt) || metadata.fileCount !== indexStartSnapshot.fileCount || metadata.latestMtimeMs !== indexStartSnapshot.latestMtimeMs || metadata.rulesFingerprint !== policy.fingerprint || metadata.policyReconciled !== true || JSON.stringify(metadata.pendingPaths ?? []) !== JSON.stringify(finalMetadata.pendingPaths) || JSON.stringify(metadata.failedPaths ?? []) !== JSON.stringify(finalMetadata.failedPaths)) {
+              await this.publishIndexMetadata(metadataPath, vaultPath, policy, finalMetadata);
             } else {
-              await this.finishPolicyReconciliation(metadataPath, vaultPath, policy, metadata);
+              await this.publishIndexMetadata(metadataPath, vaultPath, policy, metadata);
+            }
+            if (failedFiles > 0) {
+              return { success: false, chunks: 0, message: `Failed to index ${failedFiles} file(s).`, maintenancePerformed: maintenance };
             }
             return { success: true, chunks: 0, message: maintenance ? "Index up to date. Maintenance completed." : "Index up to date, no changes detected.", maintenancePerformed: maintenance };
           }
           await this.maintainTable(table);
           await this.writeJsonAtomic(hashPath, currentHashes);
+          await this.publishIndexMetadata(metadataPath, vaultPath, policy, finalMetadata);
           if (failedFiles > 0) {
             return {
               success: false,
@@ -35592,7 +35677,6 @@ var init_store = __esm({
               message: `Failed to index ${failedFiles} file(s).`
             };
           }
-          await this.finishPolicyReconciliation(metadataPath, vaultPath, policy, { ...indexStartSnapshot, indexedAt: Date.now() });
           if (canIncremental) {
             console.error(`Incremental update: ${indexedChunks} chunks embedded, ${deletedPaths.length} files removed.`);
           } else {
@@ -35609,6 +35693,7 @@ var init_store = __esm({
       async moveFile(vaultPath, sourceRelativePath, destRelativePath, workspacePath, vaultId) {
         const release = await this.acquireLock();
         let releaseIndexLock = null;
+        let failureContext;
         try {
           const policy = await loadNotePolicy(vaultPath);
           const sourcePath = this.validatePath(sourceRelativePath);
@@ -35643,13 +35728,18 @@ var init_store = __esm({
             await this.writeNotesSchemaVersion(schemaVersionPath);
           }
           await this.ensureFtsIndex(table);
-          const result = await this.indexNoteIntoTable(table, embedder, vaultPath, destPath, pathsToDelete);
-          if (!result.success) return result;
+          failureContext = { metadataPath, paths: pathsToDelete };
+          const result = await this.indexNoteIntoTable(table, embedder, vaultPath, destPath, metadataPath, pathsToDelete);
+          if (!result.success) {
+            await this.recordIndexFailure(metadataPath, pathsToDelete);
+            return result;
+          }
           delete hashes[sourcePath];
           if (result.contentHash) {
             hashes[destPath] = result.contentHash;
           }
           await this.writeJsonAtomic(hashPath, hashes);
+          await this.finishIndexWrite(metadataPath, pathsToDelete);
           await policy.assertUnchanged(vaultPath);
           await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath, policy);
           if ((result.chunks ?? 0) === 0) {
@@ -35658,6 +35748,7 @@ var init_store = __esm({
           console.error(`Moved index entry from ${sourceRelativePath} to ${destRelativePath} (${result.chunks} chunks).`);
           return { success: true, chunks: result.chunks };
         } catch (err) {
+          if (failureContext) await this.recordIndexFailure(failureContext.metadataPath, failureContext.paths);
           console.error(`Failed to move indexed file ${sourceRelativePath} to ${destRelativePath}:`, err);
           return { success: false, message: String(err) };
         } finally {
@@ -35676,6 +35767,9 @@ var init_store = __esm({
         }
         if (metadata.metadataVersion !== INDEX_METADATA_VERSION || metadata.rulesFingerprint !== policy.fingerprint || metadata.policyReconciled !== true) {
           return { stale: true, reason: "ignore rules require a whole-vault obsidian_rag_index reconciliation" };
+        }
+        if ((metadata.pendingPaths?.length ?? 0) > 0 || (metadata.failedPaths?.length ?? 0) > 0) {
+          return { stale: true, reason: "some note updates are incomplete or failed; run obsidian_rag_index to retry them" };
         }
         const snapshot = await this.getVaultIndexSnapshot(vaultPath);
         if (snapshot.fileCount !== metadata.fileCount) {
@@ -35704,6 +35798,10 @@ var init_store = __esm({
           return await prepareSnapshot(basePath, NOTES_TABLE_SCHEMA, NOTES_TABLE_SCHEMA_VERSION, policy, async (hashes) => {
             await policy.assertUnchanged(vaultPath);
             await this.assertIndexPolicy(paths.metadataPath, policy);
+            const metadata = await this.readIndexMetadata(paths.metadataPath);
+            if ((metadata?.pendingPaths?.length ?? 0) > 0 || (metadata?.failedPaths?.length ?? 0) > 0) {
+              throw new Error("Index is stale: note updates are incomplete or failed. Run obsidian_rag_index before preparing a snapshot.");
+            }
             const files = this.filterIndexableMarkdownFiles(vaultPath, await this.listMarkdownFiles(vaultPath, policy));
             if (files.length !== Object.keys(hashes).length) {
               throw new Error("Index is stale: note membership changed. Run obsidian_rag_index before preparing a snapshot.");

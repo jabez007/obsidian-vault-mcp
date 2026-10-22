@@ -220,7 +220,7 @@ Edit `.obsidian-mcpignore` directly. Note tools refuse to create, edit, overwrit
 
 ### Reconcile rule changes and upgrade existing indexes
 
-`index-metadata.json` format version 2 records `rulesFingerprint` and `policyReconciled`. The SHA-256 fingerprint covers the ordered rule lines and a version for matching semantics and built-in exclusions. Normalization removes an optional UTF-8 BOM, normalizes line endings, and discards comments and blank lines. It preserves meaningful whitespace and escapes. Missing, empty, and comment-only ignore files have the same fingerprint.
+`index-metadata.json` format version 2 records `rulesFingerprint` and `policyReconciled` for row eligibility. It also records `pendingPaths` for interrupted row writes and `failedPaths` for content that could not be indexed. The SHA-256 fingerprint covers the ordered rule lines and a version for matching semantics and built-in exclusions. Normalization removes an optional UTF-8 BOM, normalizes line endings, and discards comments and blank lines. It preserves meaningful whitespace and escapes. Missing, empty, and comment-only ignore files have the same fingerprint.
 
 After changing rules, run a whole-vault scan:
 
@@ -230,9 +230,9 @@ node dist/index.js obsidian_rag_index
 
 Queries return an error requesting this scan when the fingerprint is missing or different, or reconciliation is incomplete. MCP sets `isError: true`, and CLI exits nonzero. Single-note updates and moves cannot certify a whole index under new rules. A successful scan removes newly excluded paths and indexes newly included notes even when their contents and mtimes did not change.
 
-Each operation captures one ruleset. Queries and discovery recheck the rules before returning content, and snapshot preparation rechecks before publishing. If rules change during the operation, it fails with a retry message. Failed or interrupted reconciliation keeps queries blocked, even if the owner restores earlier rules. Retry the whole-vault scan to recover. Recovery from an interrupted scan can require re-embedding notes whose indexing state is uncertain.
+Each operation captures one ruleset. Queries and discovery recheck the rules before returning content, and snapshot preparation rechecks before publishing. If rules change during the operation, it fails with a retry message. A whole-vault sweep removes excluded and orphaned rows, then records the reconciled rules even if some notes cannot be read or embedded. An unfinished eligibility sweep blocks queries. Content failures and interrupted row writes produce a stale-index notice while queries remain available for eligible rows. Before changing rows, the indexer saves the affected paths in `pendingPaths`. It clears each completed path only after saving its matching file hash. Recovery re-embeds pending paths and notes whose contents changed, while unchanged notes keep their embeddings. Snapshot export refuses pending or failed updates until a scan or a successful note update resolves them.
 
-Existing indexes require one normal whole-vault scan after this upgrade, even without an ignore file. The scan reuses unchanged embeddings when the previous indexing state is intact. The notes table schema remains version 3. Old snapshots without rule metadata cannot satisfy the new query and export checks. Reconcile the source index and prepare a new snapshot before sharing it. Receiving-side snapshot activation remains part of issue #24.
+Existing indexes require one normal whole-vault scan after this upgrade, even without an ignore file. The scan reuses unchanged embeddings, including after an MCP note edit during the upgrade. The notes table schema remains version 3. Old snapshots without rule metadata cannot satisfy the new query and export checks. Reconcile the source index and prepare a new snapshot before sharing it. Receiving-side snapshot activation remains part of issue #24.
 
 Ignore rules affect discovery and indexing only. They do not control access by explicit path, Git tracking, or shell access. They do not remove content from earlier snapshots or Git and Git LFS history.
 

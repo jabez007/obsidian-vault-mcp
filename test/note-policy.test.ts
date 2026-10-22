@@ -225,17 +225,124 @@ describe('vault ignore policy', () => {
     expect((await query()).length).toBe(1);
   });
 
-  it('rejects a rules change during indexing and remains blocked if the old rules are restored', async () => {
+  it('keeps queries available and skips unchanged notes across repeated unreadable-file scans', async () => {
+    for (const name of ['a.md', 'b.md', 'unreadable.md']) await write(name);
+    await scan();
+    const db = await lancedb.connect(path.join(store, 'lancedb'));
+    const table = await db.openTable('notes');
+    const optimize = vi.spyOn(Object.getPrototypeOf(table), 'optimize'); table.close(); db.close();
+    await fs.chmod(path.join(vault, 'unreadable.md'), 0);
+    vi.clearAllMocks();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(await scan()).toMatchObject({ success: false });
+      const embeddingCalls = vi.mocked(Embedder.getInstance).mock.results.flatMap(r => r.value?.embedBatch?.mock?.calls ?? []);
+      expect(embeddingCalls).toEqual([]);
+      const response = await dispatchMcpTool('obsidian_rag_query', { query: 'Policyuniquemarker' }, context());
+      expect(response.isError).not.toBe(true);
+      expect(response.content[0].text).toContain('Index may be stale');
+    }
+    expect(optimize).not.toHaveBeenCalled();
+    await fs.chmod(path.join(vault, 'unreadable.md'), 0o600);
+    expect(await scan()).toMatchObject({ success: true, chunks: 0 });
+    expect(await indexer.checkIndexStaleness(vault, tmp, 'policy')).toEqual({ stale: false });
+    expect(vi.mocked(Embedder.getInstance).mock.results.flatMap(r => r.value?.embedBatch?.mock?.calls ?? [])).toEqual([]);
+  });
+
+  it.each(['single-note update', 'move'])(
+    'recovers only the affected paths after a failed %s row write', async operation => {
+      for (const name of ['note.md', 'other.md', 'third.md']) await write(name);
+      await scan();
+      const db = await lancedb.connect(path.join(store, 'lancedb'));
+      const table = await db.openTable('notes');
+      const add = vi.spyOn(Object.getPrototypeOf(table), 'add').mockRejectedValueOnce(new Error('Write failed'));
+      table.close(); db.close();
+      if (operation === 'move') await fs.rename(path.join(vault, 'note.md'), path.join(vault, 'moved.md'));
+      else await write('note.md', text + ' Changed.');
+      const result = operation === 'move'
+        ? await indexer.moveFile(vault, 'note.md', 'moved.md', tmp, 'policy')
+        : await indexer.indexFile(vault, 'note.md', tmp, 'policy');
+      expect(result.success).toBe(false);
+      expect(await metadata()).toMatchObject({ policyReconciled: true,
+        pendingPaths: operation === 'move' ? ['moved.md', 'note.md'] : ['note.md'] });
+      expect((await query()).map(row => row.path).sort()).toEqual(['other.md', 'third.md']);
+      expect(await indexer.checkIndexStaleness(vault, tmp, 'policy')).toMatchObject({ stale: true });
+      if (operation === 'single-note update') await write('note.md');
+      add.mockRestore(); vi.clearAllMocks();
+      expect(await scan()).toMatchObject({ success: true, chunks: 1 });
+      expect(await metadata()).toMatchObject({ pendingPaths: [], failedPaths: [] });
+      expect((await query()).length).toBe(3);
+    });
+
+  it('keeps completed batches checkpointed when a later batch fails', async () => {
+    for (let i = 0; i < 6; i++) await write(`${i}.md`);
+    await scan();
+    for (let i = 0; i < 6; i++) await write(`${i}.md`, text + ' Changed.');
+    vi.stubEnv('OBSIDIAN_EMBED_BATCH_SIZE', '1');
+    const db = await lancedb.connect(path.join(store, 'lancedb')); const table = await db.openTable('notes');
+    const prototype = Object.getPrototypeOf(table); const originalAdd = prototype.add;
+    const add = vi.spyOn(prototype, 'add').mockImplementationOnce(function(this: any, ...args: any[]) {
+      return originalAdd.apply(this, args);
+    }).mockRejectedValueOnce(new Error('Later batch failed'));
+    table.close(); db.close();
+    await expect(scan()).rejects.toThrow('Later batch failed');
+    const state = await metadata();
+    expect(state.policyReconciled).toBe(true);
+    expect(state.pendingPaths).toHaveLength(1);
+    expect((await query()).length).toBe(5);
+    await write(state.pendingPaths[0]);
+    add.mockRestore(); vi.clearAllMocks();
+    expect(await scan()).toMatchObject({ success: true, chunks: 1 });
+    const inputs = vi.mocked(Embedder.getInstance).mock.results.flatMap(r =>
+      (r.value?.embedBatch?.mock?.calls ?? []).flatMap((args: [string[]]) => args[0]));
+    expect(inputs).toHaveLength(1);
+    expect((await query()).length).toBe(6);
+  });
+
+  it('blocks an unfinished eligibility sweep and retries it without re-embedding unaffected notes', async () => {
+    await write('note.md'); await write('drafts/ignored.md'); await scan();
+    await write(IGNORE_FILE_NAME, '/drafts/');
+    const db = await lancedb.connect(path.join(store, 'lancedb')); const table = await db.openTable('notes');
+    const remove = vi.spyOn(Object.getPrototypeOf(table), 'delete').mockRejectedValueOnce(new Error('Sweep interrupted'));
+    table.close(); db.close();
+    await expect(scan()).rejects.toThrow('Sweep interrupted');
+    expect(await metadata()).toMatchObject({ policyReconciled: false, pendingPaths: ['drafts/ignored.md'] });
+    await expect(query()).rejects.toThrow('obsidian_rag_index');
+    remove.mockRestore(); vi.clearAllMocks();
+    expect(await scan()).toMatchObject({ success: true, chunks: 0 });
+    expect(vi.mocked(Embedder.getInstance).mock.results.flatMap(r => r.value?.embedBatch?.mock?.calls ?? [])).toEqual([]);
+    expect((await query()).map(row => row.path)).toEqual(['note.md']);
+    expect(await metadata()).toMatchObject({ policyReconciled: true, pendingPaths: [], failedPaths: [] });
+  });
+
+  it.each(['legacy metadata', 'nonexcluding rules'])(
+    'reuses unaffected embeddings after an MCP edit with %s', async scenario => {
+      for (const name of ['a.md', 'b.md', 'c.md']) await write(name);
+      await scan();
+      if (scenario === 'legacy metadata') {
+        const legacy = await metadata();
+        delete legacy.metadataVersion; delete legacy.rulesFingerprint; delete legacy.policyReconciled;
+        await fs.writeFile(metadataPath(), JSON.stringify(legacy));
+      } else await write(IGNORE_FILE_NAME, '/no-matching-folder/');
+      vi.clearAllMocks();
+      await dispatchMcpTool('obsidian_append_note', { file_path: 'a.md', content: 'An MCP edit.' }, context());
+      expect(await scan()).toMatchObject({ success: true, chunks: 0 });
+      const embeddingInputs = vi.mocked(Embedder.getInstance).mock.results.flatMap(r =>
+        (r.value?.embedBatch?.mock?.calls ?? []).flatMap((args: [string[]]) => args[0]));
+      expect(embeddingInputs).toHaveLength(1);
+      expect((await query()).length).toBe(3);
+    });
+
+  it('rejects changed rules but preserves the completed policy sweep for the captured rules', async () => {
     await write('note.md'); await scan();
     await write('note.md', text + ' changed');
     vi.mocked(Embedder.getInstance).mockImplementationOnce(() => ({
       embedBatch: async (texts: string[]) => { await write(IGNORE_FILE_NAME, '/drafts/'); return texts.map(() => Array(384).fill(0.1)); },
     }) as any);
     await expect(scan()).rejects.toThrow('changed during');
-    expect((await metadata()).policyReconciled).toBe(false);
-    await write(IGNORE_FILE_NAME, '');
-    await indexer.indexFile(vault, 'note.md', tmp, 'policy');
+    expect((await metadata()).policyReconciled).toBe(true);
     await expect(query()).rejects.toThrow('obsidian_rag_index');
+    await write(IGNORE_FILE_NAME, '');
+    expect((await query()).length).toBe(1);
     await scan();
     expect((await query()).length).toBe(1);
   });
@@ -261,8 +368,8 @@ describe('vault ignore policy', () => {
     expect(result.content[0].text).not.toContain(text);
   });
 
-  it('keeps queries blocked after a failed scan even when rules are restored', async () => {
-    await write('note.md'); await scan();
+  it('completes the policy sweep even when a note fails to embed', async () => {
+    await write('note.md'); await write('drafts/excluded.md'); await scan();
     await write(IGNORE_FILE_NAME, '/drafts/');
     await write('new.md');
     vi.mocked(Embedder.getInstance).mockImplementationOnce(() => ({
@@ -270,13 +377,19 @@ describe('vault ignore policy', () => {
       embed: async () => { throw new Error('Embedding failed'); },
     }) as any);
     expect(await scan()).toMatchObject({ success: false });
+    expect((await metadata()).policyReconciled).toBe(true);
+    const response = await dispatchMcpTool('obsidian_rag_query', { query: 'Policyuniquemarker' }, context());
+    expect(response.isError).not.toBe(true);
+    expect(response.content[0].text).toContain('Index may be stale');
+    expect(response.content[0].text).not.toContain('drafts/excluded.md');
+    await expect(prepare()).rejects.toThrow('stale');
     await write(IGNORE_FILE_NAME, '');
     await expect(query()).rejects.toThrow('obsidian_rag_index');
     await scan();
-    expect((await query()).map(row => row.path).sort()).toEqual(['new.md', 'note.md']);
+    expect((await query()).map(row => row.path).sort()).toEqual(['drafts/excluded.md', 'new.md', 'note.md']);
   });
 
-  it('keeps reconciliation dirty if rules change while the final metadata is published', async () => {
+  it('blocks a rule mismatch during final metadata publication without discarding a completed sweep', async () => {
     await write('note.md'); await scan();
     const cli = path.resolve('dist/index.js');
     await expect(promisify(execFile)(process.execPath, ['-e', `
@@ -293,9 +406,10 @@ describe('vault ignore policy', () => {
       process.argv = [process.execPath, ${JSON.stringify(cli)}, 'obsidian_rag_index'];
       require(${JSON.stringify(cli)}).main();
     `], { env: env() })).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('changed during') });
-    expect((await metadata()).policyReconciled).toBe(false);
-    await write(IGNORE_FILE_NAME, '');
+    expect((await metadata()).policyReconciled).toBe(true);
     await expect(query()).rejects.toThrow('obsidian_rag_index');
+    await write(IGNORE_FILE_NAME, '');
+    expect((await query()).length).toBe(1);
   });
 
   it('exports fingerprinted snapshots, validates staged text, and reuses equivalent rules', async () => {
@@ -347,33 +461,48 @@ describe('vault ignore policy', () => {
       .rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('obsidian_rag_index') });
   });
 
-  it('keeps reconciliation dirty after a real indexing process is killed', async () => {
-    await write('note.md'); await scan();
+  it('recovers only an interrupted write path after a real indexing process is killed', async () => {
+    for (const name of ['note.md', 'other.md', 'third.md']) await write(name);
+    await scan();
+    await write('note.md', text + ' An external edit.');
     const cli = path.resolve('dist/index.js');
-    // Pause at the durable dirty-marker rename, before table mutations or model loading.
+    // Kill after the real delete. The old file hash still exists, so restoring
+    // the old content makes recovery depend on the persisted path journal.
     const child = spawn(process.execPath, ['-e', `
-      const fs = require('node:fs/promises');
-      const rename = fs.rename;
-      fs.rename = async (from, to) => {
-        await rename(from, to);
-        if (String(to).endsWith('index-metadata.json') && JSON.parse(await fs.readFile(to, 'utf8')).policyReconciled === false) {
-          process.send('dirty'); setInterval(() => {}, 1000); await new Promise(() => {});
-        }
-      };
-      process.argv = [process.execPath, ${JSON.stringify(cli)}, 'obsidian_rag_index'];
-      require(${JSON.stringify(cli)}).main();
+      const lance = require(${JSON.stringify(require.resolve('@lancedb/lancedb'))});
+      (async () => {
+        const db = await lance.connect(${JSON.stringify(path.join(store, 'lancedb'))});
+        const table = await db.openTable('notes');
+        const prototype = Object.getPrototypeOf(table);
+        const remove = prototype.delete;
+        prototype.delete = async function(...args) {
+          await remove.apply(this, args);
+          process.send('deleted'); setInterval(() => {}, 1000); await new Promise(() => {});
+        };
+        process.argv = [process.execPath, ${JSON.stringify(cli)}, 'obsidian_rag_index'];
+        await require(${JSON.stringify(cli)}).main();
+      })().catch(error => { console.error(error); process.exitCode = 1; });
     `], { env: env(), stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     const exited = once(child, 'exit');
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       expect(await Promise.race([once(child, 'message').then(([msg]) => msg),
-        exited.then(() => { throw new Error('Index process exited before writing dirty metadata'); }),
+        exited.then(() => { throw new Error('Index process exited before deleting rows'); }),
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Index pause timed out')), 5000); }),
-      ])).toBe('dirty');
+      ])).toBe('deleted');
     } finally { clearTimeout(timer); child.kill('SIGKILL'); await exited; }
-    expect((await metadata()).policyReconciled).toBe(false);
-    await expect(query()).rejects.toThrow('obsidian_rag_index');
-    await scan();
-    expect((await query()).length).toBe(1);
+    expect(await metadata()).toMatchObject({ policyReconciled: true, pendingPaths: ['note.md'] });
+    await write('note.md');
+    const response = await dispatchMcpTool('obsidian_rag_query', { query: 'Policyuniquemarker' }, context());
+    expect(response.isError).not.toBe(true);
+    expect(response.content[0].text).toContain('Index may be stale');
+    await expect(prepare()).rejects.toThrow('stale');
+    vi.clearAllMocks();
+    expect(await scan()).toMatchObject({ success: true, chunks: 1 });
+    const inputs = vi.mocked(Embedder.getInstance).mock.results.flatMap(r =>
+      (r.value?.embedBatch?.mock?.calls ?? []).flatMap((args: [string[]]) => args[0]));
+    expect(inputs).toHaveLength(1);
+    expect((await query()).length).toBe(3);
+    expect(await metadata()).toMatchObject({ pendingPaths: [], failedPaths: [] });
   });
 });

@@ -86,6 +86,9 @@ async function readMetadata(basePath: string, schemaVersion: number) {
   if (schema?.notesTableSchemaVersion !== schemaVersion) {
     throw new Error('Incompatible index schema. Run obsidian_rag_index with force_reindex=true before preparing a snapshot.');
   }
+  if ((metadata?.pendingPaths?.length ?? 0) > 0 || (metadata?.failedPaths?.length ?? 0) > 0) {
+    throw new Error('Index is stale: note updates are incomplete or failed. Run obsidian_rag_index before preparing a snapshot.');
+  }
   if (!hashes || typeof hashes !== 'object' || Array.isArray(hashes) ||
       Object.values(hashes).some(hash => typeof hash !== 'string' || !/^[a-f0-9]{32}$/.test(hash))) {
     throw new Error('Invalid file-hashes.json. Run obsidian_rag_index before preparing a snapshot.');
