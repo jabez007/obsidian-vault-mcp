@@ -15,6 +15,10 @@ All notable changes to this project will be documented in this file.
 - Accept `--key=value` CLI options so empty values and values beginning with `--` reach the tool unchanged. Options that require a value now reject a missing one.
 - Resolve full-path wikilinks such as `[[folder/note]]` in `obsidian_get_broken_links`.
 - Report reindex failures after note writes and moves as a warning in the tool result. A failed reindex after a move no longer returns an error once the file has moved.
+- Install the Claude Code and Codex plugins from the repository root and remove the generated wrappers under `plugins/`. Claude Code now installs the plugin's npm dependencies itself and runs the committed `dist/index.js` directly, so the `claude-mcp-server.sh` launcher and its `flock`, `sha256sum`, and `OBSIDIAN_INSTALL_LOCK_WAIT_SECONDS` requirements are gone. Claude Code, Codex, and Gemini CLI share one `hooks/hooks.json`.
+- Publish only `dist/` to npm. Host manifests, skills, and hooks install from Git.
+- Remove `opencode.json`, which only worked from a checkout, and the unused `scripts/reindex-note.sh`. The README shows the OpenCode `mcp` entry for the npm package.
+- Replace `npm run sync-assets` with `npm run sync-version`, which `npm version` runs automatically.
 
 ## [2.1.0] - 2026-09-09
 

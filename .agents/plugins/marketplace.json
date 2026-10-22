@@ -8,7 +8,7 @@
       "name": "obsidian-vault-mcp",
       "source": {
         "source": "local",
-        "path": "./plugins/obsidian-vault-mcp"
+        "path": "./"
       },
       "policy": {
         "installation": "AVAILABLE",

@@ -495,8 +495,8 @@ describe('vault ignore policy', () => {
 
   it.each([
     { folder: '.', rules: null },
-    { folder: 'aether-labyrinth/vaults/jabez', rules: null },
-    { folder: 'aether-labyrinth/vaults/jabez', rules: '--drafts/\nnotes=archive.md\n' },
+    { folder: 'workspace/vaults/personal', rules: null },
+    { folder: 'workspace/vaults/personal', rules: '--drafts/\nnotes=archive.md\n' },
   ])('runs the documented staged-rule hook from $folder with rules $rules', async ({ folder, rules }) => {
     const run = promisify(execFile);
     await run('git', ['init', '--quiet', tmp]);

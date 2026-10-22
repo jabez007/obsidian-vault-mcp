@@ -15,38 +15,36 @@ Thank you for your interest in contributing! We welcome pull requests, bug repor
     npm install
     ```
 
-3.  **Build the Project**
-    We use TypeScript. You can build once or watch for changes:
+3.  **Build and Test**
     ```bash
     npm run build
-    # or
-    npm run watch
+    npm test
+    npm run lint
+    npm run type-check
     ```
+    Commit the rebuilt `dist/index.js` with your source changes. Plugin hosts install from Git and run that file, and CI fails when it doesn't match the source.
 
-4.  **Local Testing**
-    To test your changes, you can install the extension locally in the Gemini CLI:
-    ```bash
-    gemini install .
-    ```
-    Then, use the CLI to trigger your modified tools:
-    ```bash
-    /obsidian:list_notes
-    ```
+4.  **Try the Plugin Locally**
+    Run `claude --plugin-dir .` to start Claude Code with your checkout as a plugin. For another MCP host, point it at `node /absolute/path/to/obsidian-vault-mcp/dist/index.js`.
 
 ## Project Structure
 
-- `src/index.ts`: Entry point. Handles MCP server setup and CLI argument parsing.
-- `src/rag/`: Logic for Retrieval Augmented Generation.
+- `src/index.ts`: Entry point. Starts the MCP server or runs one tool from the command line.
+- `src/tools/`: The tool registry. Each tool is defined once in `registry.ts`, which drives both MCP and CLI dispatch.
+- `src/note-policy.ts`: Decides which notes discovery, indexing, and writes include, including `.obsidian-mcpignore` rules.
+- `src/rag/`: Retrieval Augmented Generation.
     - `store.ts`: LanceDB vector store management.
-    - `embedder.ts`: Embeddings generation using `@xenova/transformers`.
-- `commands/`: TOML configuration for Gemini CLI slash commands.
-- `hooks/`: Configuration for automated hooks (e.g., re-indexing after note creation).
+    - `embedder.ts`: Embeddings through `@huggingface/transformers`.
+    - `snapshot.ts`: Index snapshot preparation.
+- `skills/`: Skills for Claude Code and Codex.
+- `commands/`, `agents/`: Slash commands and agents for Gemini CLI.
+- `hooks/hooks.json`, `scripts/session-init.sh`: The session-start hook that reports vault status and refreshes the RAG index.
 
 ## Guidelines
 
 - **Issue tracking**: Use [GitHub Issues](https://github.com/jabez007/obsidian-vault-mcp/issues) for bug reports, feature requests, and work status. Do not commit duplicate issue records or PR description drafts.
 - **TypeScript**: Ensure your code is typed. Avoid `any` where possible.
-- **Tools**: If adding a new tool, define its schema in `src/index.ts` and add the implementation logic in the `CallToolRequestSchema` handler.
+- **Tools**: Add a new tool to `src/tools/registry.ts`. MCP and CLI dispatch pick it up from there.
 - **Dependencies**: Keep dependencies minimal. This extension runs locally, so download size and startup time matter.
 
 ## Pull Requests
@@ -86,9 +84,9 @@ Start the next change from the updated `main`. Do not reuse a squash-merged bran
 ## Publish a release
 
 1. Create a release preparation branch from `main`.
-2. Update `package.json` and `package-lock.json` with `npm version <version> --no-git-tag-version`.
-3. Run `npm run sync-assets` and update `CHANGELOG.md` and `RELEASE_NOTES.md`.
-4. Commit the version changes and generated assets, then open a PR to `main` for CodeRabbit review and CI.
+2. Run `npm version <version> --no-git-tag-version`. It updates `package.json` and `package-lock.json`, then runs `npm run sync-version` to copy the version into the host manifests.
+3. Update `CHANGELOG.md` and `RELEASE_NOTES.md`.
+4. Commit the version changes, then open a PR to `main` for CodeRabbit review and CI.
 5. Merge the PR and update your local `main`:
 
    ```bash

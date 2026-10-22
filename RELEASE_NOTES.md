@@ -11,6 +11,7 @@ Version 2.2.0 adds an optional per-vault ignore file for discovery and search. T
 - Check staged ignore rules before sharing an index with the new `rules_text` argument to `obsidian_prepare_index_snapshot`.
 - The index records notes whose updates were interrupted or failed. They produce a stale-index notice, and the next scan re-embeds only those notes.
 - `obsidian_get_broken_links` resolves full-path links such as `[[folder/note]]`.
+- The Claude Code plugin no longer needs Bash `flock` or `sha256sum` to start its server. Claude Code installs the plugin's dependencies when it installs or updates the plugin, and the server runs from that copy. The Claude Code and Codex plugins now install from the repository root.
 
 ## Upgrade
 
@@ -21,6 +22,10 @@ npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index
 ```
 
 Snapshots prepared by 2.1.0 have no rule metadata. Prepare a new snapshot after the scan before sharing the index.
+
+Claude Code plugin users update with `/plugin marketplace update obsidian-vault-mcp` and then `/plugin update obsidian-vault-mcp@obsidian-vault-mcp`. The 2.1.0 launcher left its own dependency copy in `~/.claude/plugins/data/obsidian-vault-mcp-obsidian-vault-mcp/`. You can delete its `node_modules/`, `dist/`, `package.json`, `package-lock.json`, `.install-stamp`, and `.install.lock` to free about 1 GB. Keep `logs/`.
+
+The Codex repo marketplace now points at the repository root instead of `plugins/obsidian-vault-mcp/`. If Codex keeps loading the old copy, remove the plugin and add it again.
 
 These changes can affect scripts:
 

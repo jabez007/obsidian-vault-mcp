@@ -17,8 +17,14 @@
     "rag",
     "mcp"
   ],
-  "skills": "./skills/",
   "commands": [],
   "agents": [],
-  "mcpServers": "./.mcp.json"
+  "mcpServers": {
+    "obsidian-vault-mcp": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/dist/index.js"
+      ]
+    }
+  }
 }

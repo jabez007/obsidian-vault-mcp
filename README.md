@@ -23,56 +23,44 @@ This project integrates your **Obsidian Vault** into Claude Code, Codex CLI, Ope
 
 ## Installation
 
-Claude Code and OpenCode can run this server directly from a local checkout. The Codex, Gemini, and generic MCP manifests keep the package-based launch shape used by earlier releases.
+Every host runs the same MCP server. The Claude Code, Codex, and Gemini CLI plugins also add skills and a session-start hook that reports vault status and refreshes the RAG index. Other hosts run the npm package with `npx`.
 
-### Claude Code plugin
+### Claude Code
 
-This repo is a Claude Code plugin marketplace. From Claude Code, add the marketplace and install the plugin:
+Add this repository as a plugin marketplace and install the plugin:
 
 ```text
-/plugin marketplace add https://github.com/jabez007/obsidian-vault-mcp.git
+/plugin marketplace add jabez007/obsidian-vault-mcp
 /plugin install obsidian-vault-mcp@obsidian-vault-mcp
 ```
 
-For local development or testing from a checkout:
+When Claude Code installs or updates the plugin, it installs the npm dependencies from `package-lock.json` into its copy of the plugin. The server then runs the committed `dist/index.js` with `node`. If `/plugin` reports that the plugin's packages are not installed, run `/plugin update obsidian-vault-mcp@obsidian-vault-mcp` to retry the install.
+
+To add only the MCP server, without skills or the hook:
 
 ```sh
-claude plugin validate .
-claude plugin marketplace add . --scope local
-claude plugin install obsidian-vault-mcp@obsidian-vault-mcp --scope local
+claude mcp add obsidian-vault-mcp -- npx -y @jabez007/obsidian-vault-mcp@2
 ```
 
-The Claude marketplace uses `.claude-plugin/marketplace.json` and installs the generated wrapper under `plugins/claude-obsidian-vault-mcp/`. That wrapper is generated from `.claude-plugin/plugin.json`, `.claude-plugin/mcp.json`, `.claude-plugin/hooks.json`, root `skills/`, `scripts/session-init.sh`, `scripts/session-index.mjs`, `scripts/claude-mcp-server.sh`, `package.json`, `package-lock.json`, and `dist/index.js`. The MCP server runs through `scripts/claude-mcp-server.sh`, which installs production dependencies into Claude's `${CLAUDE_PLUGIN_DATA}` directory before launching the bundled server. The `SessionStart` hook runs `scripts/session-init.sh`, which reports vault status and refreshes the RAG index when a vault is configured.
+### Codex
 
-The Claude launcher requires Bash, `sha256sum`, and `flock`. On Linux, `flock` is provided by util-linux. Concurrent launches share an install lock and recheck the dependency stamp after waiting. The lock is released before the server starts. `OBSIDIAN_INSTALL_LOCK_WAIT_SECONDS` sets the maximum wait, in seconds, and defaults to `120`.
-
-### Codex CLI plugin
-
-This repo includes a repo-scoped Codex marketplace at `.agents/plugins/marketplace.json` and a dedicated plugin wrapper at `plugins/obsidian-vault-mcp/`. Open Codex in this repository, restart if it was already running, and install the plugin from the repo marketplace:
-
-```text
-/plugins
-```
-
-Look for the `Obsidian Vault MCP Repo` marketplace and install `Obsidian Vault`.
-
-If you want to use this repository as a marketplace source from outside the repo checkout, add it explicitly:
+Add this repository as a plugin marketplace:
 
 ```sh
-codex plugin marketplace add /absolute/path/to/obsidian-vault-mcp
+codex plugin marketplace add jabez007/obsidian-vault-mcp
+```
+
+Then open `/plugins` in Codex, choose the `Obsidian Vault MCP Repo` marketplace, and install `Obsidian Vault`. The plugin runs the server with `npx`. Codex asks you to review and trust the plugin's session hook before it runs.
+
+To add only the MCP server:
+
+```sh
+codex mcp add obsidian-vault-mcp -- npx -y @jabez007/obsidian-vault-mcp@2
 ```
 
 ### OpenCode
 
-Build the local checkout, then start OpenCode from this repo so it can use the included `opencode.json`:
-
-```sh
-npm install
-npm run build
-opencode
-```
-
-The config uses OpenCode's `mcp` format:
+Add the server to `opencode.json` in your project or to `~/.config/opencode/opencode.json`:
 
 ```json
 {
@@ -80,8 +68,7 @@ The config uses OpenCode's `mcp` format:
   "mcp": {
     "obsidian-vault-mcp": {
       "type": "local",
-      "command": ["node", "dist/index.js"],
-      "cwd": ".",
+      "command": ["npx", "-y", "@jabez007/obsidian-vault-mcp@2"],
       "enabled": true,
       "timeout": 30000
     }
@@ -89,36 +76,34 @@ The config uses OpenCode's `mcp` format:
 }
 ```
 
-After OpenCode starts, ask it to use the `obsidian-vault-mcp` tools, for example: `Index my Obsidian vault using obsidian-vault-mcp`.
-
-### Gemini CLI extension
-
-Gemini compatibility remains in place through `gemini-extension.json`:
+### Gemini CLI
 
 ```sh
 gemini extensions install https://github.com/jabez007/obsidian-vault-mcp
 ```
 
-The extension manifest uses the package-based MCP launch shape from earlier releases, so no in-extension install step is required once that package is available to `npx`.
+The extension uses `gemini-extension.json`, which runs the server with `npx`, plus `commands/`, `agents/`, and the shared session hook. CI doesn't test the Gemini extension.
 
-### Generic MCP host configuration
+### Antigravity and other MCP hosts
 
-For other MCP-capable hosts using a local checkout, build this repo and add this server configuration:
+Add this server to the host's MCP configuration:
 
 ```json
 {
   "mcpServers": {
     "obsidian-vault-mcp": {
-      "command": "node",
-      "args": ["/absolute/path/to/obsidian-vault-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@jabez007/obsidian-vault-mcp@2"]
     }
   }
 }
 ```
 
+To run a local checkout instead, use `"command": "node"` and `"args": ["/absolute/path/to/obsidian-vault-mcp/dist/index.js"]`.
+
 ### Local development
 
-For local development, build the server in this checkout and run it directly:
+Build the server in a checkout and run it directly:
 
 ```sh
 npm install
@@ -126,7 +111,7 @@ npm run build
 node dist/index.js
 ```
 
-The packaged manifests use `npx`. Hook scripts can be pointed at a local build with:
+To try the Claude Code plugin from a checkout, run `claude plugin validate .` and start Claude Code with `claude --plugin-dir .`. The session hook uses the checkout's build when `node_modules/` exists. To point the hook at another build, set:
 
 ```sh
 export OBSIDIAN_MCP_SERVER_COMMAND="node /absolute/path/to/obsidian-vault-mcp/dist/index.js"
@@ -192,7 +177,7 @@ The first time you use a tool, the server can persist `vault_path`, `workspace_p
 - **Rebuild After Upgrading to 2.0.0**: version 2.0.0 replaced the embedding library (`@xenova/transformers` → `@huggingface/transformers`). Existing indexes still load — the model and its 384 dimensions are unchanged — but vectors embedded by the new stack are not numerically identical to old ones, so an index mixing pre- and post-upgrade chunks quietly degrades ranking quality. Run a one-time full rebuild after upgrading: `npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index --force_reindex`.
 - **Index Schema Migrations**: The index layout is stamped with a schema version (`schema-version.json`). After an upgrade that changes the layout (for example, the clean-text/heading-breadcrumb columns), both indexing and querying refuse with a message asking for a one-time `obsidian_rag_index` run with `force_reindex=true`; the rebuild restamps the version and everything resumes normally.
 - **Index Coordination & Freshness**: Each vault index directory uses an advisory `index.lock` to coordinate queries, indexing, and snapshot preparation across processes. Queries wait for an active writer or exporter, subject to `OBSIDIAN_INDEX_LOCK_WAIT_MS`, which defaults to 30 seconds. Queries compare markdown file counts and mtimes against the last successful index metadata. Changes made directly in Obsidian can produce results with a stale-index notice. Restores that preserve both the file count and older timestamps remain invisible to this heuristic. Run `obsidian_rag_index` with `force_reindex` after those restores. Ignore-rule changes have a separate fingerprint check and block queries until reconciliation succeeds.
-- **Module Not Found Error**: If you see an error like `Cannot find module '@lancedb/lancedb'`, launch through `npx -y @jabez007/obsidian-vault-mcp@2` so npm installs runtime dependencies automatically. For local development, run `npm install && npm run build`.
+- **Module Not Found Error**: If you see an error like `Cannot find module '@lancedb/lancedb'` in the Claude Code plugin, run `/plugin update obsidian-vault-mcp@obsidian-vault-mcp` to retry the dependency install. On other hosts, launch through `npx -y @jabez007/obsidian-vault-mcp@2` so npm installs runtime dependencies. For local development, run `npm install && npm run build`.
 - **Logs**: Since this runs as an MCP server, errors are typically output to stderr.
 
 If the session hook reports `RAG index refresh failed`, open the log path included in its message. The hook keeps the five newest failure logs, each limited to the last 64 KiB of diagnostics, under `${CLAUDE_PLUGIN_DATA}/logs`. Other hosts use `${XDG_STATE_HOME}/obsidian-vault-mcp/logs`, or `~/.local/state/obsidian-vault-mcp/logs` when `XDG_STATE_HOME` is unset. Logs include stderr, the CLI response, and exit status. Successful runs do not retain a log.
@@ -336,28 +321,24 @@ OBSIDIAN_MIN_CHUNK_CHARS=60 \
 npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index
 ```
 
-## Host-specific assets
+## Host files
 
-- **Canonical shared assets** live at the repo root. Edit `skills/` for skills and `agents/` for local agents; do not edit generated host copies by hand.
-- **Claude Code** uses `.claude-plugin/marketplace.json` and the generated wrapper under `plugins/claude-obsidian-vault-mcp/`. The wrapper contains Claude-specific `.claude-plugin/plugin.json`, `.mcp.json`, `hooks/hooks.json`, `skills/`, `scripts/session-init.sh`, `scripts/session-index.mjs`, `scripts/claude-mcp-server.sh`, package manifests, and `dist/index.js`.
-- **Codex package/checkouts** use `.codex-plugin/plugin.json`, `.mcp.json`, `skills/`, and `agents/` from the repo root.
-- **Codex repo marketplace installs** use `.agents/plugins/marketplace.json` and the plugin wrapper under `plugins/obsidian-vault-mcp/`. The wrapper's `.codex-plugin/`, `.mcp.json`, and `skills/` are generated from the root assets.
-- **OpenCode** uses `opencode.json` with its top-level `mcp` configuration and the built `dist/index.js` from this checkout.
-- **Legacy Gemini CLI** continues to use `gemini-extension.json`, `commands/`, `hooks/hooks.json`, and the scripts in `scripts/`.
-- **Shared behavior**: all hosts expose the same MCP server tools, and note-writing MCP tools re-index the changed note inside the server.
-- **Compatibility note**: the Codex wrapper intentionally does not bundle hooks yet. Gemini keeps `hooks/hooks.json`, while Codex relies on the in-server post-write reindex flow and avoids cross-host hook drift.
+Plugin hosts install from the repository root. Edit these files directly. Only `dist/index.js` is generated.
 
-After changing root skills, host plugin metadata, or `.mcp.json`, run:
+| File | Used by |
+|---|---|
+| `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` | Claude Code. The manifest runs `node ${CLAUDE_PLUGIN_ROOT}/dist/index.js`, which replaces the `npx` entry of the same name in `.mcp.json`. It also turns off the `commands/` and `agents/` folders, which use Gemini formats. |
+| `.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json`, `.mcp.json` | Codex. `.mcp.json` runs the npm package. |
+| `gemini-extension.json`, `commands/`, `agents/` | Gemini CLI. |
+| `hooks/hooks.json`, `scripts/session-init.sh`, `scripts/session-index.mjs` | The session-start hook for Claude Code, Codex, and Gemini CLI. Claude Code and Codex set `CLAUDE_PLUGIN_ROOT`, and Gemini CLI substitutes `${extensionPath}`. |
+| `skills/` | Claude Code and Codex. |
+| `dist/index.js` | Built by `npm run build` and committed, because Claude Code installs the plugin from Git. CI fails when it doesn't match the source. |
 
-```sh
-npm run sync-assets
-```
-
-CI runs the same sync and fails if it changes generated host assets under `plugins/`, so host asset drift cannot merge silently.
+All hosts expose the same MCP tools, and note-writing tools reindex the changed note inside the server.
 
 ## Versioning
 
-`package.json` is the version source of truth. `gemini-extension.json`, `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, both `.codex-plugin/plugin.json` files, and the MCP server constructor derive from or are tested against the package version so release metadata stays aligned.
+`package.json` is the version source of truth. `npm version` runs `scripts/sync-version.mjs`, which copies the version into `gemini-extension.json`, `.claude-plugin/plugin.json`, and `.codex-plugin/plugin.json`, and the major version into the `npx` commands. Run `npm run sync-version` after editing the version by hand. CI fails when these files disagree with `package.json`.
 
 ## Available Tools
 
