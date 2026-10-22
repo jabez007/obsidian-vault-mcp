@@ -96,8 +96,58 @@ export async function discoverNotes(vaultPath: string, policy: NotePolicy, patte
 export function assertNoteMutationAllowed(vaultPath: string, relativePath: string): void {
   const candidate = getSafeFilePath(vaultPath, relativePath);
   const protectedPath = path.join(vaultPath, IGNORE_FILE_NAME);
-  if (path.resolve(candidate) === path.resolve(protectedPath) ||
-      resolveRealPathAllowMissing(candidate) === resolveRealPathAllowMissing(protectedPath)) {
+  const realCandidate = resolveRealPathAllowMissing(candidate);
+  // Case-insensitive volumes (default macOS and Windows) open any case variant
+  // of the name as the policy file. No note needs those names, so every
+  // volume rejects them.
+  const isRootCaseVariant = path.dirname(realCandidate) === resolveRealPathAllowMissing(vaultPath) &&
+    path.basename(realCandidate).toLowerCase() === IGNORE_FILE_NAME;
+  if (path.resolve(candidate) === path.resolve(protectedPath) || isRootCaseVariant ||
+      realCandidate === resolveRealPathAllowMissing(protectedPath)) {
     throw new NotePolicyError(`Note tools cannot change ${IGNORE_FILE_NAME}. Edit it directly.`);
   }
+}
+
+export interface DirectoryReader {
+  readdir(directory: string): Promise<string[]>;
+  lstat(file: string): Promise<{ dev: bigint; ino: bigint }>;
+}
+
+const directoryReader: DirectoryReader = {
+  readdir: directory => fs.readdir(directory),
+  lstat: file => fs.lstat(file, { bigint: true }),
+};
+
+// On a case-insensitive volume, a caller can address an existing note with
+// different casing. Policy checks and index keys must use the spelling that
+// discovery reports, or an ignored note could be indexed under another
+// spelling. Each existing component takes the stored name of the same
+// directory entry, so symlinks keep the addressed name. Missing components
+// keep the caller's spelling.
+export async function resolveStoredNotePath(
+  vaultPath: string, relativePath: string, fileSystem: DirectoryReader = directoryReader,
+): Promise<string> {
+  const stored: string[] = [];
+  let directory = vaultPath;
+  for (const segment of normalizeNotePath(relativePath).split('/')) {
+    let name = segment;
+    try {
+      const entries = await fileSystem.readdir(directory);
+      if (!entries.includes(segment)) {
+        const target = await fileSystem.lstat(path.join(directory, segment));
+        const folded = segment.normalize('NFC').toLowerCase();
+        for (const entry of entries) {
+          if (entry.normalize('NFC').toLowerCase() !== folded) continue;
+          const candidate = await fileSystem.lstat(path.join(directory, entry));
+          if (candidate.dev === target.dev && candidate.ino === target.ino) { name = entry; break; }
+        }
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+    }
+    stored.push(name);
+    directory = path.join(directory, name);
+  }
+  return stored.join('/');
 }

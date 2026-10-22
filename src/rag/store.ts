@@ -12,7 +12,7 @@ import { buildEmbeddingInputs, ChunkingOptions, normalizeToStringArray, NoteMeta
 import { getSafeFilePath } from '../utils.js';
 import { prepareSnapshot, SnapshotResult } from './snapshot.js';
 import { getProcessStartIdentity } from './process-identity.js';
-import { INDEX_METADATA_VERSION, loadNotePolicy, NotePolicy, NotePolicyError } from '../note-policy.js';
+import { INDEX_METADATA_VERSION, loadNotePolicy, NotePolicy, NotePolicyError, resolveStoredNotePath } from '../note-policy.js';
 
 function getFirstNumericEnv(keys: string[], fallback: number): number {
   for (const key of keys) {
@@ -773,7 +773,7 @@ export class VaultIndexer {
     let failureContext: { metadataPath: string; paths: string[] } | undefined;
     try {
       const policy = await loadNotePolicy(vaultPath);
-      const normalizedPath = this.validatePath(relativePath);
+      const normalizedPath = await resolveStoredNotePath(vaultPath, this.validatePath(relativePath));
       const filePath = getSafeFilePath(vaultPath, normalizedPath);
       const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
       releaseIndexLock = await this.acquireIndexLock(lockPath);
@@ -1214,7 +1214,8 @@ export class VaultIndexer {
     try {
       const policy = await loadNotePolicy(vaultPath);
       const sourcePath = this.validatePath(sourceRelativePath);
-      const destPath = this.validatePath(destRelativePath);
+      // The source no longer exists, so only the destination has a stored spelling.
+      const destPath = await resolveStoredNotePath(vaultPath, this.validatePath(destRelativePath));
       getSafeFilePath(vaultPath, sourcePath);
       const filePath = getSafeFilePath(vaultPath, destPath);
       const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];

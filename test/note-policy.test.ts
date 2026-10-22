@@ -6,7 +6,7 @@ import { once } from 'node:events';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as lancedb from '@lancedb/lancedb';
-import { NotePolicy, IGNORE_FILE_NAME } from '../src/note-policy';
+import { NotePolicy, IGNORE_FILE_NAME, resolveStoredNotePath } from '../src/note-policy';
 import { VaultIndexer, STORAGE_DIR_NAME } from '../src/rag/store';
 import { Embedder } from '../src/rag/embedder';
 import { createToolContext } from '../src/index';
@@ -198,6 +198,57 @@ describe('vault ignore policy', () => {
     }
     expect(await fs.readFile(path.join(vault, 'note.md'), 'utf8')).toBe(text);
     expect(await fs.readFile(policyFile(), 'utf8')).toBe('# protected');
+  });
+
+  it('rejects every case variant of the ignore file name at the vault root', async () => {
+    // Case-insensitive volumes (default macOS and Windows) would create the
+    // policy file through these names, so no volume accepts them.
+    for (const file_path of ['.OBSIDIAN-MCPIGNORE', '.Obsidian-McpIgnore']) {
+      const created = await dispatchMcpTool('obsidian_create_note', { file_path, content: '/drafts/' }, context());
+      expect(created.isError).toBe(true);
+      expect(created.content[0].text).toContain('Edit it directly');
+    }
+    await write('note.md');
+    const moved = await dispatchMcpTool('obsidian_move_note', { source_path: 'note.md', dest_path: '.OBSIDIAN-MCPIGNORE' }, context());
+    expect(moved.isError).toBe(true);
+    expect((await fs.readdir(vault)).sort()).toEqual(['note.md']);
+    const nested = await dispatchMcpTool('obsidian_create_note', { file_path: 'sub/.OBSIDIAN-MCPIGNORE', content: 'x' }, context());
+    expect(nested.isError).not.toBe(true);
+  });
+
+  it('resolves the stored spelling of existing path components on a case-insensitive volume', async () => {
+    // A fake case-insensitive tree. Each entry's identity is its stored path.
+    const tree: Record<string, string[]> = { '': ['drafts', 'Notes'], 'drafts': ['Secret.md'], 'Notes': [] };
+    const stored = (relative: string) => {
+      let current = '';
+      for (const segment of relative.split('/').filter(Boolean)) {
+        const entry = tree[current]?.find(name => name.toLowerCase() === segment.toLowerCase());
+        if (!entry) return null;
+        current = current ? `${current}/${entry}` : entry;
+      }
+      return current;
+    };
+    const root = '/vault';
+    const fileSystem = {
+      readdir: async (directory: string) => tree[stored(path.relative(root, directory)) ?? ''] ?? [],
+      lstat: async (file: string) => {
+        const identity = stored(path.relative(root, file));
+        if (identity === null) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        return { dev: 1n, ino: BigInt(Object.keys(tree).indexOf(identity) + 1000 + identity.length) };
+      },
+    };
+    expect(await resolveStoredNotePath(root, 'DRAFTS/secret.md', fileSystem)).toBe('drafts/Secret.md');
+    expect(await resolveStoredNotePath(root, 'notes/new.md', fileSystem)).toBe('Notes/new.md');
+    expect(await resolveStoredNotePath(root, 'missing/Note.md', fileSystem)).toBe('missing/Note.md');
+    expect(await resolveStoredNotePath(root, 'drafts/Secret.md', fileSystem)).toBe('drafts/Secret.md');
+  });
+
+  it('keeps the addressed spelling of symlinks and of distinct entries on a case-sensitive volume', async () => {
+    await write('drafts/target.md'); await write('Drafts/target.md');
+    await fs.symlink(path.join(vault, 'drafts'), path.join(vault, 'alias'));
+    expect(await resolveStoredNotePath(vault, 'alias/target.md')).toBe('alias/target.md');
+    expect(await resolveStoredNotePath(vault, 'Drafts/target.md')).toBe('Drafts/target.md');
+    expect(await resolveStoredNotePath(vault, 'drafts/new.md')).toBe('drafts/new.md');
   });
 
   it('matches symlinks by the addressed path and keeps independent vault rules isolated', async () => {
@@ -518,6 +569,13 @@ describe('vault ignore policy', () => {
     const options = { cwd: vault, env: { ...env(), OBSIDIAN_TEST_CLI: path.resolve('dist/index.js') } };
     const result = await run('sh', ['-c', script], options);
     expect(JSON.parse(result.stdout)).toMatchObject({ success: true, rulesFingerprint: new NotePolicy(rules ?? '').fingerprint });
+    if (rules !== null) {
+      // The index now matches the working-tree rules, so only a hook that
+      // checks the staged rules still fails.
+      await write(IGNORE_FILE_NAME, '/unstaged-only/\n');
+      await scan();
+      await expect(run('sh', ['-c', script], options)).rejects.toMatchObject({ code: 1 });
+    }
     // A broken Git index must fail rather than being treated as an absent file.
     await fs.writeFile(path.join(tmp, '.git', 'index'), 'invalid Git index');
     await expect(run('sh', ['-c', script], options)).rejects.toMatchObject({ code: 1 });

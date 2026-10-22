@@ -7719,13 +7719,13 @@ var require_ignore = __commonJS({
         const rules = this._rules;
         const { length } = rules;
         const shortcut = this._basenameCount * 2 >= length;
-        const basename3 = shortcut ? basenameOf(path8) : path8;
+        const basename4 = shortcut ? basenameOf(path8) : path8;
         for (let index = 0; index < length; index++) {
           const rule = rules[index];
           const { negative } = rule;
           const skip = unignored === negative && ignored !== unignored || negative && !ignored && !unignored && !checkUnignored;
           if (!skip && rule[mode].test(
-            shortcut && rule._basenameOnly ? basename3 : path8
+            shortcut && rule._basenameOnly ? basename4 : path8
           )) {
             ignored = !negative;
             unignored = negative;
@@ -11621,11 +11621,41 @@ async function discoverNotes(vaultPath, policy, pattern = "**/*.md") {
 function assertNoteMutationAllowed(vaultPath, relativePath) {
   const candidate = getSafeFilePath(vaultPath, relativePath);
   const protectedPath = path2.join(vaultPath, IGNORE_FILE_NAME);
-  if (path2.resolve(candidate) === path2.resolve(protectedPath) || resolveRealPathAllowMissing(candidate) === resolveRealPathAllowMissing(protectedPath)) {
+  const realCandidate = resolveRealPathAllowMissing(candidate);
+  const isRootCaseVariant = path2.dirname(realCandidate) === resolveRealPathAllowMissing(vaultPath) && path2.basename(realCandidate).toLowerCase() === IGNORE_FILE_NAME;
+  if (path2.resolve(candidate) === path2.resolve(protectedPath) || isRootCaseVariant || realCandidate === resolveRealPathAllowMissing(protectedPath)) {
     throw new NotePolicyError(`Note tools cannot change ${IGNORE_FILE_NAME}. Edit it directly.`);
   }
 }
-var fs3, path2, import_node_crypto, import_node_util, import_ignore, IGNORE_FILE_NAME, INDEX_METADATA_VERSION, RULES_VERSION, NotePolicyError, NotePolicy;
+async function resolveStoredNotePath(vaultPath, relativePath, fileSystem = directoryReader) {
+  const stored = [];
+  let directory = vaultPath;
+  for (const segment of normalizeNotePath(relativePath).split("/")) {
+    let name = segment;
+    try {
+      const entries = await fileSystem.readdir(directory);
+      if (!entries.includes(segment)) {
+        const target = await fileSystem.lstat(path2.join(directory, segment));
+        const folded = segment.normalize("NFC").toLowerCase();
+        for (const entry of entries) {
+          if (entry.normalize("NFC").toLowerCase() !== folded) continue;
+          const candidate = await fileSystem.lstat(path2.join(directory, entry));
+          if (candidate.dev === target.dev && candidate.ino === target.ino) {
+            name = entry;
+            break;
+          }
+        }
+      }
+    } catch (error2) {
+      const code = error2.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error2;
+    }
+    stored.push(name);
+    directory = path2.join(directory, name);
+  }
+  return stored.join("/");
+}
+var fs3, path2, import_node_crypto, import_node_util, import_ignore, IGNORE_FILE_NAME, INDEX_METADATA_VERSION, RULES_VERSION, NotePolicyError, NotePolicy, directoryReader;
 var init_note_policy = __esm({
   "src/note-policy.ts"() {
     "use strict";
@@ -11678,6 +11708,10 @@ var init_note_policy = __esm({
           throw new NotePolicyError(`${IGNORE_FILE_NAME} changed during this operation. Retry; run obsidian_rag_index to reconcile the index.`, "NOTE_POLICY_CHANGED");
         }
       }
+    };
+    directoryReader = {
+      readdir: (directory) => fs3.readdir(directory),
+      lstat: (file2) => fs3.lstat(file2, { bigint: true })
     };
   }
 });
@@ -35348,7 +35382,7 @@ var init_store = __esm({
         let failureContext;
         try {
           const policy = await loadNotePolicy(vaultPath);
-          const normalizedPath = this.validatePath(relativePath);
+          const normalizedPath = await resolveStoredNotePath(vaultPath, this.validatePath(relativePath));
           const filePath = getSafeFilePath(vaultPath, normalizedPath);
           const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
           releaseIndexLock = await this.acquireIndexLock(lockPath);
@@ -35701,7 +35735,7 @@ var init_store = __esm({
         try {
           const policy = await loadNotePolicy(vaultPath);
           const sourcePath = this.validatePath(sourceRelativePath);
-          const destPath = this.validatePath(destRelativePath);
+          const destPath = await resolveStoredNotePath(vaultPath, this.validatePath(destRelativePath));
           getSafeFilePath(vaultPath, sourcePath);
           const filePath = getSafeFilePath(vaultPath, destPath);
           const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];

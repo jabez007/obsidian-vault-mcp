@@ -36,7 +36,7 @@ These changes can affect scripts:
 
 ## Known issues
 
-- Ignore rules match case-sensitively on every platform. On case-insensitive volumes, the default on macOS and Windows, two cases are untested. A note tool may be able to create the ignore file using different letter case. An explicit write to an ignored folder through a differently cased path may index that note until the next full scan.
+- Ignore rules match case-sensitively on every platform. Note tools reject differently cased names for the ignore file, and explicit writes and moves use the spelling stored on disk. Unit tests cover the stored-spelling lookup with a simulated case-insensitive volume. No test runs on macOS or Windows.
 - Ignore rules don't control access by explicit path, Git tracking, or shell access. They don't remove content from earlier snapshots or from Git history.
 
 ---
