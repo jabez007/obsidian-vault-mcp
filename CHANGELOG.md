@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Add optional per-vault `.obsidian-mcpignore` rules shared by discovery, indexing, edits, moves, and snapshot preparation. Preserve explicit access to ignored notes and protect the ignore file from note-tool mutations. Implements #25.
+- Record rule fingerprints and durable reconciliation state in index metadata format version 2 and snapshot manifest policy version 2. Block RAG queries and exports until a whole-vault scan reconciles changed rules. Support caller-supplied `rules_text` for staged-rule checks. Implements the query and export portions of #26. Snapshot adoption checks remain part of #24.
+- Existing indexes require one normal whole-vault scan after upgrading. Reuse unchanged embeddings when previous indexing state is intact. Failed or interrupted scans require a successful retry before querying. Queries now share the cross-process index lock with writers and exporters.
+
 ## [2.1.0] - 2026-09-09
 
 - Recover abandoned snapshot staging directories under the index locks, distinguish reused Linux PIDs from the original lock owner, and require the supported LanceDB version for manifest parsing. Build the CLI before tests and correct missing stdin callbacks in dispatch tests.

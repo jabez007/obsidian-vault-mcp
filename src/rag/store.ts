@@ -12,6 +12,7 @@ import { buildEmbeddingInputs, ChunkingOptions, normalizeToStringArray, NoteMeta
 import { getSafeFilePath } from '../utils.js';
 import { prepareSnapshot, SnapshotResult } from './snapshot.js';
 import { getProcessStartIdentity } from './process-identity.js';
+import { INDEX_METADATA_VERSION, loadNotePolicy, NotePolicy, NotePolicyError } from '../note-policy.js';
 
 function getFirstNumericEnv(keys: string[], fallback: number): number {
   for (const key of keys) {
@@ -67,6 +68,9 @@ interface IndexLockInfo {
 }
 
 interface IndexMetadata {
+  metadataVersion?: number;
+  rulesFingerprint?: string;
+  policyReconciled?: boolean;
   indexedAt: number;
   fileCount: number;
   latestMtimeMs: number;
@@ -107,12 +111,6 @@ interface NoteIndexResult extends IndexResult {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// Match the vault scanner: lowercase markdown outside hidden directories.
-function isIndexableNotePath(relativePath: string): boolean {
-  const normalized = path.posix.normalize(relativePath.replace(/\\/g, '/'));
-  return normalized.endsWith('.md') && !normalized.split('/').some(segment => segment.startsWith('.'));
 }
 
 export class VaultIndexer {
@@ -386,9 +384,9 @@ export class VaultIndexer {
     return { success: false, message: FULL_REINDEX_REQUIRED_MESSAGE };
   }
 
-  private async listMarkdownFiles(vaultPath: string): Promise<string[]> {
+  private async listMarkdownFiles(vaultPath: string, policy: NotePolicy): Promise<string[]> {
     const files = await glob('**/*.md', { cwd: vaultPath, absolute: true, follow: true, dot: false, nocase: false, nodir: true });
-    return files.filter(file => isIndexableNotePath(path.relative(vaultPath, file)));
+    return files.filter(file => policy.includes(path.relative(vaultPath, file)));
   }
 
   private filterIndexableMarkdownFiles(vaultPath: string, discoveredFiles: string[]): string[] {
@@ -421,7 +419,7 @@ export class VaultIndexer {
   }
 
   private async getVaultIndexSnapshot(vaultPath: string): Promise<Omit<IndexMetadata, 'indexedAt'>> {
-    return this.getVaultIndexSnapshotForFiles(await this.listMarkdownFiles(vaultPath));
+    return this.getVaultIndexSnapshotForFiles(await this.listMarkdownFiles(vaultPath, await loadNotePolicy(vaultPath)));
   }
 
   private async readIndexMetadata(metadataPath: string): Promise<IndexMetadata | null> {
@@ -438,6 +436,7 @@ export class VaultIndexer {
 
   private async writeIndexMetadata(metadataPath: string, snapshot: Omit<IndexMetadata, 'indexedAt'>) {
     await this.writeJsonAtomic(metadataPath, {
+      metadataVersion: INDEX_METADATA_VERSION,
       indexedAt: Date.now(),
       ...snapshot,
     });
@@ -450,17 +449,46 @@ export class VaultIndexer {
   // stats) so our own note creations do not raise false stale notices; the
   // residual blind spot is an external deletion or timestamp-preserving sync
   // landing between full indexes, which the next indexVault reconciles.
-  private async mergeIndexMetadataForFile(metadataPath: string, vaultPath: string, absoluteFilePath: string | null) {
+  private async mergeIndexMetadataForFile(metadataPath: string, vaultPath: string, absoluteFilePath: string | null, policy: NotePolicy) {
     const previous = await this.readIndexMetadata(metadataPath);
     if (!previous) return; // stays missing until the next full index
     const [files, fileStat] = await Promise.all([
-      this.listMarkdownFiles(vaultPath),
+      this.listMarkdownFiles(vaultPath, policy),
       absoluteFilePath ? fs.stat(absoluteFilePath).catch(() => null) : null,
     ]);
     await this.writeIndexMetadata(metadataPath, {
+      rulesFingerprint: previous.rulesFingerprint,
+      policyReconciled: previous.policyReconciled,
       fileCount: files.length,
       latestMtimeMs: Math.max(previous.latestMtimeMs, fileStat?.mtimeMs ?? 0),
     });
+  }
+
+  private async markPolicyDirty(metadataPath: string, policy: NotePolicy, always = false) {
+    const metadata = await this.readIndexMetadata(metadataPath);
+    if (always || metadata?.metadataVersion !== INDEX_METADATA_VERSION || metadata.rulesFingerprint !== policy.fingerprint || metadata.policyReconciled !== true) {
+      await this.writeJsonAtomic(metadataPath, {
+        indexedAt: 0, fileCount: 0, latestMtimeMs: 0, ...metadata, policyReconciled: false,
+      });
+    }
+  }
+
+  private async assertIndexPolicy(metadataPath: string, policy: NotePolicy) {
+    const metadata = await this.readIndexMetadata(metadataPath);
+    if (metadata?.metadataVersion !== INDEX_METADATA_VERSION || metadata.rulesFingerprint !== policy.fingerprint || metadata.policyReconciled !== true) {
+      throw new NotePolicyError('Index ignore rules are missing, changed, or incompletely reconciled. Run obsidian_rag_index on the whole vault before querying or exporting.', 'INDEX_POLICY_MISMATCH');
+    }
+  }
+
+  private async finishPolicyReconciliation(metadataPath: string, vaultPath: string, policy: NotePolicy, metadata: IndexMetadata) {
+    try {
+      await policy.assertUnchanged(vaultPath);
+      await this.writeJsonAtomic(metadataPath, { ...metadata, metadataVersion: INDEX_METADATA_VERSION });
+      await policy.assertUnchanged(vaultPath);
+    } catch (error) {
+      await this.markPolicyDirty(metadataPath, policy, true);
+      throw error;
+    }
   }
 
   private parseIndexLock(raw: string | null): IndexLockInfo | null {
@@ -718,11 +746,14 @@ export class VaultIndexer {
     const release = await this.acquireLock();
     let releaseIndexLock: (() => Promise<void>) | null = null;
     try {
+      const policy = await loadNotePolicy(vaultPath);
       const normalizedPath = this.validatePath(relativePath);
       const filePath = getSafeFilePath(vaultPath, normalizedPath);
       const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
       releaseIndexLock = await this.acquireIndexLock(lockPath);
-      if (!isIndexableNotePath(normalizedPath)) {
+      await policy.assertUnchanged(vaultPath);
+      await this.markPolicyDirty(metadataPath, policy);
+      if (!policy.includes(normalizedPath)) {
         return await this.removeExcludedPaths(vaultPath, [normalizedPath], workspacePath, vaultId);
       }
       const embedder = Embedder.getInstance();
@@ -757,7 +788,8 @@ export class VaultIndexer {
         console.error(`Indexed ${result.chunks} chunks for ${relativePath}.`);
       }
       await this.writeJsonAtomic(hashPath, hashes);
-      await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
+      await policy.assertUnchanged(vaultPath);
+      await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath, policy);
       return { success: true, chunks: result.chunks, message: result.message };
     } catch (err) {
       console.error(`Failed to index file ${relativePath}:`, err);
@@ -782,6 +814,7 @@ export class VaultIndexer {
     const release = await this.acquireLock();
     let releaseIndexLock: (() => Promise<void>) | null = null;
     try {
+      const policy = await loadNotePolicy(vaultPath);
       const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
       releaseIndexLock = await this.acquireIndexLock(lockPath);
       const embedder = Embedder.getInstance();
@@ -791,9 +824,10 @@ export class VaultIndexer {
       // stays inside the vault boundary or an explicit OBSIDIAN_ALLOWED_VAULTS root.
       // The freshness snapshot uses the unfiltered list so it stays comparable
       // with checkIndexStaleness, which never applies the boundary filter.
-      const discoveredFiles = await this.listMarkdownFiles(vaultPath);
+      const discoveredFiles = await this.listMarkdownFiles(vaultPath, policy);
       const files = this.filterIndexableMarkdownFiles(vaultPath, discoveredFiles);
-      const indexStartSnapshot = await this.getVaultIndexSnapshotForFiles(discoveredFiles);
+      const indexStartSnapshot = { ...await this.getVaultIndexSnapshotForFiles(discoveredFiles), rulesFingerprint: policy.fingerprint, policyReconciled: true };
+      const previousMetadata = await this.readIndexMetadata(metadataPath);
       console.error(`Found ${files.length} notes in ${vaultPath}`);
 
       // Load previous file hashes for incremental indexing
@@ -825,6 +859,8 @@ export class VaultIndexer {
         ? Object.keys(previousHashes).filter(p => !existingRelativePaths.has(p))
         : [];
 
+      await policy.assertUnchanged(vaultPath);
+      await this.markPolicyDirty(metadataPath, policy, true);
       let table: lancedb.Table;
       if (canIncremental) {
         table = await db.openTable(NOTES_TABLE_NAME);
@@ -879,7 +915,7 @@ export class VaultIndexer {
               const relativePath = this.validatePath(path.relative(vaultPath, filePath).replace(/\\/g, '/'));
               const contentHash = md5(content);
 
-              if (canIncremental && previousHashes[relativePath] === contentHash) {
+              if (canIncremental && previousMetadata?.policyReconciled !== false && previousHashes[relativePath] === contentHash) {
                 return 'skipped' as const;
               }
 
@@ -928,7 +964,9 @@ export class VaultIndexer {
       // Incremental: remove old rows for changed/deleted files. A full
       // reindex starts from a freshly created table, so nothing to delete.
       if (canIncremental) {
-        const pathsToDelete = [...changedPaths, ...deletedPaths];
+        const rowPaths = await table.query().select(['path']).toArray();
+        const orphanPaths = rowPaths.map(row => String(row.path)).filter(p => !existingRelativePaths.has(p));
+        const pathsToDelete = [...new Set([...changedPaths, ...deletedPaths, ...orphanPaths])];
         const DELETE_BATCH = 100;
         for (let i = 0; i < pathsToDelete.length; i += DELETE_BATCH) {
           await this.deleteRowsForPaths(table, pathsToDelete.slice(i, i + DELETE_BATCH));
@@ -1021,6 +1059,8 @@ export class VaultIndexer {
         if (persistedChunkCounts[p] !== expectedChunkCounts[p]) failedFiles++;
       }
 
+      await policy.assertUnchanged(vaultPath);
+
       // Ensure the FTS index after rows exist rather than only against the
       // empty just-created table, so a failed creation is retried here.
       await this.ensureFtsIndex(table);
@@ -1031,11 +1071,14 @@ export class VaultIndexer {
         // A new indexedAt timestamp would invalidate an otherwise identical
         // export. Refresh metadata only to repair it or record changed file
         // stats, such as a timestamp-only touch that this scan reconciled.
-        const metadata = await this.readIndexMetadata(metadataPath);
+        const metadata = previousMetadata;
         if (!metadata || !Number.isFinite(metadata.indexedAt) ||
             metadata.fileCount !== indexStartSnapshot.fileCount ||
-            metadata.latestMtimeMs !== indexStartSnapshot.latestMtimeMs) {
-          await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
+            metadata.latestMtimeMs !== indexStartSnapshot.latestMtimeMs ||
+            metadata.rulesFingerprint !== policy.fingerprint || metadata.policyReconciled !== true) {
+          await this.finishPolicyReconciliation(metadataPath, vaultPath, policy, { ...indexStartSnapshot, indexedAt: Date.now() });
+        } else {
+          await this.finishPolicyReconciliation(metadataPath, vaultPath, policy, metadata);
         }
         return { success: true, chunks: 0, message: maintenance ? 'Index up to date. Maintenance completed.' : 'Index up to date, no changes detected.', maintenancePerformed: maintenance };
       }
@@ -1048,8 +1091,8 @@ export class VaultIndexer {
       await this.writeJsonAtomic(hashPath, currentHashes);
 
       if (failedFiles > 0) {
-        // Skip the freshness metadata so queries keep warning that the index
-        // is stale until a run completes without failures.
+        // Keep the durable dirty marker so queries remain blocked until a
+        // whole-vault run completes without failures.
         return {
           success: false,
           chunks: indexedChunks,
@@ -1057,7 +1100,7 @@ export class VaultIndexer {
         };
       }
 
-      await this.writeIndexMetadata(metadataPath, indexStartSnapshot);
+      await this.finishPolicyReconciliation(metadataPath, vaultPath, policy, { ...indexStartSnapshot, indexedAt: Date.now() });
 
       if (canIncremental) {
         console.error(`Incremental update: ${indexedChunks} chunks embedded, ${deletedPaths.length} files removed.`);
@@ -1083,6 +1126,7 @@ export class VaultIndexer {
     const release = await this.acquireLock();
     let releaseIndexLock: (() => Promise<void>) | null = null;
     try {
+      const policy = await loadNotePolicy(vaultPath);
       const sourcePath = this.validatePath(sourceRelativePath);
       const destPath = this.validatePath(destRelativePath);
       getSafeFilePath(vaultPath, sourcePath);
@@ -1090,10 +1134,12 @@ export class VaultIndexer {
       const pathsToDelete = sourcePath === destPath ? [destPath] : [sourcePath, destPath];
       const { hashPath, lockPath, metadataPath, schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
       releaseIndexLock = await this.acquireIndexLock(lockPath);
-      if (!isIndexableNotePath(destPath)) {
+      await policy.assertUnchanged(vaultPath);
+      await this.markPolicyDirty(metadataPath, policy);
+      if (!policy.includes(destPath)) {
         const result = await this.removeExcludedPaths(vaultPath, pathsToDelete, workspacePath, vaultId);
-        if (result.success && isIndexableNotePath(sourcePath)) {
-          await this.mergeIndexMetadataForFile(metadataPath, vaultPath, null);
+        if (result.success && policy.includes(sourcePath)) {
+          await this.mergeIndexMetadataForFile(metadataPath, vaultPath, null, policy);
         }
         return result;
       }
@@ -1126,7 +1172,8 @@ export class VaultIndexer {
         hashes[destPath] = result.contentHash;
       }
       await this.writeJsonAtomic(hashPath, hashes);
-      await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath);
+      await policy.assertUnchanged(vaultPath);
+      await this.mergeIndexMetadataForFile(metadataPath, vaultPath, filePath, policy);
 
       if ((result.chunks ?? 0) === 0) {
         return { success: true, chunks: 0, message: 'Moved file has no embeddable content.' };
@@ -1146,10 +1193,14 @@ export class VaultIndexer {
   }
 
   public async checkIndexStaleness(vaultPath: string, workspacePath?: string | null, vaultId?: string | null): Promise<IndexStaleness> {
+    const policy = await loadNotePolicy(vaultPath);
     const { metadataPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
     const metadata = await this.readIndexMetadata(metadataPath);
     if (!metadata) {
       return { stale: true, reason: 'index metadata is missing' };
+    }
+    if (metadata.metadataVersion !== INDEX_METADATA_VERSION || metadata.rulesFingerprint !== policy.fingerprint || metadata.policyReconciled !== true) {
+      return { stale: true, reason: 'ignore rules require a whole-vault obsidian_rag_index reconciliation' };
     }
 
     const snapshot = await this.getVaultIndexSnapshot(vaultPath);
@@ -1168,16 +1219,22 @@ export class VaultIndexer {
     return { stale: false };
   }
 
-  public async prepareIndexSnapshot(vaultPath: string, workspacePath?: string | null, vaultId?: string | null): Promise<SnapshotResult> {
+  public async prepareIndexSnapshot(vaultPath: string, workspacePath?: string | null, vaultId?: string | null, rulesText?: string): Promise<SnapshotResult> {
     const waitMs = Math.max(0, getFirstNumericEnv(['OBSIDIAN_INDEX_LOCK_WAIT_MS', 'CODEX_OBSIDIAN_INDEX_LOCK_WAIT_MS', 'GEMINI_OBSIDIAN_INDEX_LOCK_WAIT_MS'], 30000));
     const release = await this.acquireLock(waitMs);
     let releaseIndexLock: (() => Promise<void>) | undefined;
     try {
       const paths = await this.getPaths(vaultPath, workspacePath, vaultId);
+      const policy = await loadNotePolicy(vaultPath);
+      if (rulesText !== undefined && new NotePolicy(rulesText).fingerprint !== policy.fingerprint) {
+        throw new NotePolicyError('Supplied ignore rules differ from the current index rules. Run obsidian_rag_index under the rules being exported.', 'INDEX_POLICY_MISMATCH');
+      }
       const basePath = path.dirname(paths.dbPath);
       releaseIndexLock = await this.acquireIndexLock(paths.lockPath);
-      return await prepareSnapshot(basePath, NOTES_TABLE_SCHEMA, NOTES_TABLE_SCHEMA_VERSION, async (hashes) => {
-        const files = this.filterIndexableMarkdownFiles(vaultPath, await this.listMarkdownFiles(vaultPath));
+      return await prepareSnapshot(basePath, NOTES_TABLE_SCHEMA, NOTES_TABLE_SCHEMA_VERSION, policy, async (hashes) => {
+        await policy.assertUnchanged(vaultPath);
+        await this.assertIndexPolicy(paths.metadataPath, policy);
+        const files = this.filterIndexableMarkdownFiles(vaultPath, await this.listMarkdownFiles(vaultPath, policy));
         if (files.length !== Object.keys(hashes).length) {
           throw new Error('Index is stale: note membership changed. Run obsidian_rag_index before preparing a snapshot.');
         }
@@ -1203,16 +1260,20 @@ export class VaultIndexer {
     filters?: SearchFilters,
   ) {
     const release = await this.acquireLock();
+    let releaseIndexLock: (() => Promise<void>) | undefined;
     try {
+      const policy = await loadNotePolicy(vaultPath);
       // Refuse to read an index built for another schema version, matching
       // the write paths: silently serving old-shaped rows (or raw engine
       // errors from filters on old column types) hides the needed migration.
-      const { schemaVersionPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+      const { schemaVersionPath, metadataPath, lockPath } = await this.getPaths(vaultPath, workspacePath, vaultId);
+      releaseIndexLock = await this.acquireIndexLock(lockPath);
       const db = await this.getDb(vaultPath, workspacePath, vaultId);
       if (await this.existingNotesTableRequiresReindex(db, schemaVersionPath)) {
         throw new Error(FULL_REINDEX_REQUIRED_MESSAGE);
       }
 
+      await this.assertIndexPolicy(metadataPath, policy);
       const table = await this.getTable(vaultPath, workspacePath, vaultId);
       if (!table) {
           return [];
@@ -1232,17 +1293,23 @@ export class VaultIndexer {
         search.select(SEARCH_RESULT_COLUMNS);
         search.limit(limit);
         const results = await search.toArray();
-        return this.normalizeSearchResults(results as Array<Record<string, unknown>>);
+        const normalized = this.normalizeSearchResults(results as Array<Record<string, unknown>>);
+        if (normalized.some(row => !policy.includes(String(row.path)))) {
+          throw new NotePolicyError('Index contains excluded paths. Run obsidian_rag_index before querying.', 'INDEX_POLICY_MISMATCH');
+        }
+        await policy.assertUnchanged(vaultPath);
+        return normalized;
       };
 
       try {
         return await runSearch(table.search(vector).fullTextSearch(query));
       } catch (err) {
+        if (err instanceof NotePolicyError) throw err;
         console.error("FTS Hybrid Search failed, falling back to vector search. Consider running a full re-index.", err);
         return await runSearch(table.vectorSearch(vector));
       }
     } finally {
-      release();
+      try { await releaseIndexLock?.(); } finally { release(); }
     }
   }
 }

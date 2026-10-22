@@ -1,4 +1,5 @@
 import type { SearchFilters } from "../rag/store.js";
+import type { NotePolicy } from "../note-policy.js";
 
 export type JsonSchema = {
     type: string;
@@ -23,6 +24,7 @@ export interface VaultIndexerLike {
         vaultPath: string,
         workspacePath?: string | null,
         vaultId?: string | null,
+        rulesText?: string,
     ): Promise<unknown>;
     indexFile(
         vaultPath: string,
@@ -72,6 +74,7 @@ export interface SetConfigOptions {
 }
 
 export interface ToolContext {
+    notePolicy?: NotePolicy;
     indexer: VaultIndexerLike;
     getVaultPath(providedPath?: unknown): string;
     getWorkspacePath(providedPath?: unknown): string | null;

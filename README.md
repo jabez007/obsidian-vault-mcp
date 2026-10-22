@@ -191,13 +191,50 @@ The first time you use a tool, the server can persist `vault_path`, `workspace_p
 - **Cache Reset**: If you suspect the index is corrupted or want a fresh start, you can manually delete the vault-specific folder (`.obsidian-vault-mcp/vaults/<vault_identifier>`) in your workspace or the corresponding entry in the global cache. The next time you run `obsidian_rag_index`, it will be recreated.
 - **Rebuild After Upgrading to 2.0.0**: version 2.0.0 replaced the embedding library (`@xenova/transformers` → `@huggingface/transformers`). Existing indexes still load — the model and its 384 dimensions are unchanged — but vectors embedded by the new stack are not numerically identical to old ones, so an index mixing pre- and post-upgrade chunks quietly degrades ranking quality. Run a one-time full rebuild after upgrading: `npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index --force_reindex`.
 - **Index Schema Migrations**: The index layout is stamped with a schema version (`schema-version.json`). After an upgrade that changes the layout (for example, the clean-text/heading-breadcrumb columns), both indexing and querying refuse with a message asking for a one-time `obsidian_rag_index` run with `force_reindex=true`; the rebuild restamps the version and everything resumes normally.
-- **Index Coordination & Freshness**: Each vault index directory uses an advisory `index.lock` so the session hook and MCP server do not update LanceDB and `file-hashes.json` at the same time. Queries compare markdown file counts and mtimes against the last successful index metadata; if files changed directly in Obsidian, `obsidian_rag_query` may append a stale-index notice asking you to run `obsidian_rag_index`. Restores that preserve both the file count and older timestamps (e.g. `git checkout`, sync rollbacks) are not detected by this heuristic — run `obsidian_rag_index` with `force_reindex` after those.
+- **Index Coordination & Freshness**: Each vault index directory uses an advisory `index.lock` to coordinate queries, indexing, and snapshot preparation across processes. Queries wait for an active writer or exporter, subject to `OBSIDIAN_INDEX_LOCK_WAIT_MS`, which defaults to 30 seconds. Queries compare markdown file counts and mtimes against the last successful index metadata. Changes made directly in Obsidian can produce results with a stale-index notice. Restores that preserve both the file count and older timestamps remain invisible to this heuristic. Run `obsidian_rag_index` with `force_reindex` after those restores. Ignore-rule changes have a separate fingerprint check and block queries until reconciliation succeeds.
 - **Module Not Found Error**: If you see an error like `Cannot find module '@lancedb/lancedb'`, launch through `npx -y @jabez007/obsidian-vault-mcp@2` so npm installs runtime dependencies automatically. For local development, run `npm install && npm run build`.
 - **Logs**: Since this runs as an MCP server, errors are typically output to stderr.
 
 If the session hook reports `RAG index refresh failed`, open the log path included in its message. The hook keeps the five newest failure logs, each limited to the last 64 KiB of diagnostics, under `${CLAUDE_PLUGIN_DATA}/logs`. Other hosts use `${XDG_STATE_HOME}/obsidian-vault-mcp/logs`, or `~/.local/state/obsidian-vault-mcp/logs` when `XDG_STATE_HOME` is unset. Logs include stderr, the CLI response, and exit status. Successful runs do not retain a log.
 
 Search indexes lowercase `.md` files outside hidden files and directories. This rule applies to vault scans, individual writes, and moves. Tools can still create text configuration files such as `.base` or `.yaml`; those files are excluded from search. Rewriting an excluded file removes any old rows for that path. A vault scan also reconciles old excluded entries and deleted files.
+
+### Exclude notes from discovery and indexing
+
+An optional `.obsidian-mcpignore` file at the vault root excludes visible notes and folders from default discovery and search. For example:
+
+```gitignore
+# Keep these folders visible in Obsidian and tracked in Git.
+/drafts/
+/templates/
+sources/**/raw*.md
+```
+
+Rules use the `ignore` library's gitignore matching semantics, with case-sensitive matching on every platform. They support blank lines, comments starting with `#`, leading `/` anchors, trailing `/` directory rules, `*`, and `**`. Candidate paths use `/` separators. Backslashes in patterns retain their escaping meaning. Escape a literal leading `!` or `#` as `\!` or `\#`. Unescaped leading `!` negation is unsupported. Patterns that match nothing are valid. Hidden paths and files without a lowercase `.md` suffix always remain excluded.
+
+The rules apply to `obsidian_list_notes`, `obsidian_search_notes`, `obsidian_get_backlinks`, `obsidian_get_broken_links`, RAG indexing, and snapshot preparation. An ignored note still counts as an existing wikilink target. Explicit reads and edits by path continue to work, and ignored notes remain excluded from the index after edits. Moving a note into an ignored folder removes its indexed rows. Moving it out indexes the destination.
+
+Match symlinked notes by the vault-relative path used to address or discover them. Ignoring one path does not exclude another alias to the same file. Existing real-path boundary checks still apply. Rules are loaded separately for each vault and each operation.
+
+Edit `.obsidian-mcpignore` directly. Note tools refuse to create, edit, overwrite, or move it, including through symlink aliases. A missing file means no additional exclusions. Unreadable files, dangling policy symlinks, invalid UTF-8, NUL characters, and unsupported negation cause indexing and discovery to fail. Errors identify the file and, for invalid rule lines, the line number. Invalid rules do not change index rows. Explicit note edits still save, with a warning that indexing failed.
+
+### Reconcile rule changes and upgrade existing indexes
+
+`index-metadata.json` format version 2 records `rulesFingerprint` and `policyReconciled`. The SHA-256 fingerprint covers the ordered rule lines and a version for matching semantics and built-in exclusions. Normalization removes an optional UTF-8 BOM, normalizes line endings, and discards comments and blank lines. It preserves meaningful whitespace and escapes. Missing, empty, and comment-only ignore files have the same fingerprint.
+
+After changing rules, run a whole-vault scan:
+
+```sh
+node dist/index.js obsidian_rag_index
+```
+
+Queries return an error requesting this scan when the fingerprint is missing or different, or reconciliation is incomplete. MCP sets `isError: true`, and CLI exits nonzero. Single-note updates and moves cannot certify a whole index under new rules. A successful scan removes newly excluded paths and indexes newly included notes even when their contents and mtimes did not change.
+
+Each operation captures one ruleset. Queries and discovery recheck the rules before returning content, and snapshot preparation rechecks before publishing. If rules change during the operation, it fails with a retry message. Failed or interrupted reconciliation keeps queries blocked, even if the owner restores earlier rules. Retry the whole-vault scan to recover. Recovery from an interrupted scan can require re-embedding notes whose indexing state is uncertain.
+
+Existing indexes require one normal whole-vault scan after this upgrade, even without an ignore file. The scan reuses unchanged embeddings when the previous indexing state is intact. The notes table schema remains version 3. Old snapshots without rule metadata cannot satisfy the new query and export checks. Reconcile the source index and prepare a new snapshot before sharing it. Receiving-side snapshot activation remains part of issue #24.
+
+Ignore rules affect discovery and indexing only. They do not control access by explicit path, Git tracking, or shell access. They do not remove content from earlier snapshots or Git and Git LFS history.
 
 ## Prepare an index for sharing
 
@@ -214,9 +251,18 @@ You can omit these arguments to use the configured vault, workspace, and vault I
 
 ### Snapshot contract
 
-The command returns JSON with `success`, `snapshotPath`, `sourceFingerprint`, `sourceVersion`, and `reused`. The output directory is `<vault-storage>/snapshots/<sourceFingerprint>/`. It contains `lancedb/`, `file-hashes.json`, `schema-version.json`, `index-metadata.json`, and `snapshot.json`. The manifest records payload file hashes and validation results. Locks and unfinished metadata writes are excluded.
+The command returns JSON with `success`, `snapshotPath`, `sourceFingerprint`, `rulesFingerprint`, `sourceVersion`, and `reused`. The output directory is `<vault-storage>/snapshots/<sourceFingerprint>/`. It contains `lancedb/`, `file-hashes.json`, `schema-version.json`, `index-metadata.json`, and `snapshot.json`. Snapshot manifest policy version 2 records `rulesFingerprint`, payload file hashes, and validation results. `sourceFingerprint` includes the rules fingerprint. Preparation checks every exported row against the current rules. Locks and unfinished metadata writes are excluded.
 
-Preparation holds the shared index lock while it copies and validates the index. It maintains the private copy and publishes the final directory only after validation succeeds. Live queries can continue because preparation does not prune the live database. A live local process's lock never expires solely because it is old. On Linux, the lock records the boot ID and process start time so a reused PID cannot retain a dead owner's lock. When this identity is unavailable, including on other platforms and in older locks, the existing process-liveness check remains in effect. A lock from another host requires explicit resolution after confirming that its owner has stopped. `OBSIDIAN_INDEX_LOCK_WAIT_MS` controls the wait, with a default of 30 seconds.
+The optional `rules_text` argument checks a caller-supplied ruleset against both the current vault rules and the reconciled index. A Git hook can pass the staged version without asking MCP to run Git:
+
+```sh
+staged_rules=$(git show :.obsidian-mcpignore) || exit 1
+node dist/index.js obsidian_prepare_index_snapshot --rules_text "$staged_rules"
+```
+
+If the ignore file is absent from the Git index, the hook can pass an empty string instead. The hook must distinguish absence from a failed Git command. Unstaged or partly staged rule changes that alter the fingerprint cause preparation to fail. Comments and line-ending differences do not change the fingerprint. Existing exports with an older manifest policy version must be regenerated from a reconciled index.
+
+Preparation holds the shared index lock while it copies and validates the index. It maintains the private copy and publishes the final directory only after validation succeeds. Queries wait for preparation to release the lock. Preparation does not prune the live database. A live local process's lock never expires solely because it is old. On Linux, the lock records the boot ID and process start time so a reused PID cannot retain a dead owner's lock. When this identity is unavailable, including on other platforms and in older locks, the existing process-liveness check remains in effect. A lock from another host requires explicit resolution after confirming that its owner has stopped. `OBSIDIAN_INDEX_LOCK_WAIT_MS` controls the wait, with a default of 30 seconds.
 
 Published exports remain unchanged when the live database changes or undergoes maintenance. An unchanged source reuses the same export after checking its file hashes. A modified export causes an error instead of being overwritten. The command never automatically deletes older published exports. Remove them only after all staging or copying operations using them have finished. A killed process can leave an unpublished `.preparing-*` directory. The next valid preparation removes abandoned staging directories under the index locks, even when it reuses an existing export. This cleanup skips symlinks and unrelated entries.
 
