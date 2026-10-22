@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Journal every full rebuild before table creation, including when the database was removed but file hashes survive. Interrupted rebuilds retry all affected notes instead of treating the new empty table as current.
 - Fix staged-rule hook examples for absent ignore files and vaults in repository subfolders. Support inline CLI option values so rule text beginning with `--` reaches snapshot preparation unchanged, and reject missing option values.
 - Pin `ignore` to 7.0.12 and advance the matching-policy version. Indexes built with 7.0.13 require a normal reconciliation scan under the pinned matcher.
 - Add optional per-vault `.obsidian-mcpignore` rules shared by discovery, indexing, edits, moves, and snapshot preparation. Preserve explicit access to ignored notes and protect the ignore file from note-tool mutations. Implements #25.

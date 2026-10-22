@@ -298,6 +298,38 @@ describe('vault ignore policy', () => {
     expect((await query()).length).toBe(6);
   });
 
+  it('recovers an interrupted missing-table rebuild when old file hashes survive', async () => {
+    for (const name of ['a.md', 'b.md', 'c.md']) await write(name);
+    await scan();
+    const hashesPath = path.join(store, 'file-hashes.json');
+    const oldHashes = await fs.readFile(hashesPath, 'utf8');
+    await indexer.reset();
+    await fs.rm(path.join(store, 'lancedb'), { recursive: true });
+
+    const assertUnchanged = NotePolicy.prototype.assertUnchanged;
+    let checks = 0;
+    const interrupted = vi.spyOn(NotePolicy.prototype, 'assertUnchanged').mockImplementation(async function(this: NotePolicy, vaultPath: string) {
+      await assertUnchanged.call(this, vaultPath);
+      if (++checks === 2) throw new Error('Rebuild interrupted after reading notes');
+    });
+    await expect(scan()).rejects.toThrow('Rebuild interrupted after reading notes');
+    expect(await rows()).toHaveLength(0);
+    expect(await fs.readFile(hashesPath, 'utf8')).toBe(oldHashes);
+    interrupted.mockRestore();
+    const freshness = await indexer.checkIndexStaleness(vault, tmp, 'policy');
+    await indexer.reset();
+    vi.clearAllMocks();
+
+    expect(await scan()).toMatchObject({ success: true, chunks: 3 });
+    expect(freshness.stale).toBe(true);
+    expect((await rows()).map(row => row.path).sort()).toEqual(['a.md', 'b.md', 'c.md']);
+    expect((await query()).length).toBe(3);
+    expect(await indexer.checkIndexStaleness(vault, tmp, 'policy')).toEqual({ stale: false });
+    const inputs = vi.mocked(Embedder.getInstance).mock.results.flatMap(r =>
+      (r.value?.embedBatch?.mock?.calls ?? []).flatMap((args: [string[]]) => args[0]));
+    expect(inputs).toHaveLength(3);
+  });
+
   it('blocks an unfinished eligibility sweep and retries it without re-embedding unaffected notes', async () => {
     await write('note.md'); await write('drafts/ignored.md'); await scan();
     await write(IGNORE_FILE_NAME, '/drafts/');

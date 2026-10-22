@@ -35444,7 +35444,7 @@ var init_store = __esm({
           const deletedPaths = canIncremental ? Object.keys(previousHashes).filter((p) => !existingRelativePaths.has(p)) : [];
           await policy.assertUnchanged(vaultPath);
           await this.markPolicyDirty(metadataPath, policy);
-          if (!canIncremental && tableExists) {
+          if (!canIncremental) {
             await this.beginIndexWrite(metadataPath, [.../* @__PURE__ */ new Set([...Object.keys(previousHashes), ...existingRelativePaths])]);
           }
           let table;

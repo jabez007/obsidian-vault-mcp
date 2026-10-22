@@ -894,7 +894,7 @@ export class VaultIndexer {
 
       await policy.assertUnchanged(vaultPath);
       await this.markPolicyDirty(metadataPath, policy);
-      if (!canIncremental && tableExists) {
+      if (!canIncremental) {
         await this.beginIndexWrite(metadataPath, [...new Set([...Object.keys(previousHashes), ...existingRelativePaths])]);
       }
       let table: lancedb.Table;
