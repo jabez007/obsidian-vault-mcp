@@ -4,12 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Journal every full rebuild before table creation, including when the database was removed but file hashes survive. Interrupted rebuilds retry all affected notes instead of treating the new empty table as current.
-- Fix staged-rule hook examples for absent ignore files and vaults in repository subfolders. Support inline CLI option values so rule text beginning with `--` reaches snapshot preparation unchanged, and reject missing option values.
-- Pin `ignore` to 7.0.12 and advance the matching-policy version. Indexes built with 7.0.13 require a normal reconciliation scan under the pinned matcher.
-- Add optional per-vault `.obsidian-mcpignore` rules shared by discovery, indexing, edits, moves, and snapshot preparation. Preserve explicit access to ignored notes and protect the ignore file from note-tool mutations. Implements #25.
-- Record rule fingerprints and durable reconciliation state in index metadata format version 2 and snapshot manifest policy version 2. Block RAG queries and exports until a whole-vault scan reconciles changed rules. Support caller-supplied `rules_text` for staged-rule checks. Implements the query and export portions of #26. Snapshot adoption checks remain part of #24.
-- Existing indexes require one normal whole-vault scan after upgrading. Reuse unchanged embeddings when previous indexing state is intact. Separate policy reconciliation from content freshness. Unreadable notes and embedding failures produce stale-index notices. Journal pending paths before row writes and checkpoint successful hashes so recovery retries only affected notes. Queries now share the cross-process index lock with writers and exporters.
+- Add optional per-vault `.obsidian-mcpignore` rules in gitignore syntax, matched case-sensitively with `ignore` 7.0.12. One eligibility rule now applies to `obsidian_list_notes`, `obsidian_search_notes`, `obsidian_get_backlinks`, `obsidian_get_broken_links`, RAG indexing, writes, moves, and snapshot preparation. An invalid or unreadable rule file makes discovery and indexing return errors instead of unfiltered results. Explicit reads and edits of ignored notes still work, and note tools refuse to change the ignore file. Implements #25.
+- Record the rules fingerprint and reconciliation state in index metadata format version 2 and snapshot manifest policy version 2. `obsidian_rag_query` and snapshot preparation return errors until a whole-vault scan reconciles changed rules. Snapshot preparation checks every exported row against the rules and accepts `rules_text` to check staged rules. Implements the query and export portions of #26. Snapshot adoption checks remain part of #24.
+- Existing indexes require one normal whole-vault `obsidian_rag_index` scan after upgrading. The scan reuses unchanged embeddings, and the session-start hook runs it.
+- Record `pendingPaths` before index rows change and `failedPaths` for notes that cannot be read or embedded. Both produce a stale-index notice while queries stay available, and the next scan retries only those notes. Snapshot preparation refuses pending or failed updates. Journal full rebuilds too, so an interrupted rebuild after the database was removed no longer leaves an empty table reported as current.
+- Make queries take the cross-process index lock. They wait for writers and exporters up to `OBSIDIAN_INDEX_LOCK_WAIT_MS`, which defaults to 30 seconds.
+- Return `isError: true` over MCP and a nonzero CLI exit when `obsidian_rag_index` reports `success: false`.
+- Accept `--key=value` CLI options so empty values and values beginning with `--` reach the tool unchanged. Options that require a value now reject a missing one.
+- Resolve full-path wikilinks such as `[[folder/note]]` in `obsidian_get_broken_links`.
+- Report reindex failures after note writes and moves as a warning in the tool result. A failed reindex after a move no longer returns an error once the file has moved.
 
 ## [2.1.0] - 2026-09-09
 
