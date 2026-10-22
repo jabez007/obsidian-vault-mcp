@@ -82,7 +82,7 @@ Add the server to `opencode.json` in your project or to `~/.config/opencode/open
 gemini extensions install https://github.com/jabez007/obsidian-vault-mcp
 ```
 
-The extension uses `gemini-extension.json`, which runs the server with `npx`, plus `commands/`, `agents/`, and the shared session hook. CI doesn't test the Gemini extension.
+The extension uses `gemini-extension.json`, which runs the server with `npx`, plus `skills/`, `commands/`, `agents/`, and the shared session hook. CI doesn't test the Gemini extension.
 
 ### Antigravity and other MCP hosts
 
@@ -330,8 +330,8 @@ Plugin hosts install from the repository root. Edit these files directly. Only `
 | `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` | Claude Code. The manifest runs `node ${CLAUDE_PLUGIN_ROOT}/dist/index.js`, which replaces the `npx` entry of the same name in `.mcp.json`. It also turns off the `commands/` and `agents/` folders, which use Gemini formats. |
 | `.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json`, `.mcp.json` | Codex. `.mcp.json` runs the npm package. |
 | `gemini-extension.json`, `commands/`, `agents/` | Gemini CLI. |
-| `hooks/hooks.json`, `scripts/session-init.sh`, `scripts/session-index.mjs` | The session-start hook for Claude Code, Codex, and Gemini CLI. Claude Code and Codex set `CLAUDE_PLUGIN_ROOT`, and Gemini CLI substitutes `${extensionPath}`. |
-| `skills/` | Claude Code and Codex. |
+| `hooks/hooks.json`, `scripts/session-init.sh`, `scripts/session-index.mjs` | The session-start hook for Claude Code, Codex, and Gemini CLI. Claude Code and Codex set `CLAUDE_PLUGIN_ROOT`. Gemini CLI doesn't, so the command first copies `${extensionPath}`, which Gemini CLI substitutes, into a shell variable. |
+| `skills/` | Claude Code, Codex, and Gemini CLI. |
 | `dist/index.js` | Built by `npm run build` and committed, because Claude Code installs the plugin from Git. CI fails when it doesn't match the source. |
 
 All hosts expose the same MCP tools, and note-writing tools reindex the changed note inside the server.

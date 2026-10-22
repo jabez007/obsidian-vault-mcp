@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs/promises';
+import * as os from 'os';
 import * as path from 'path';
 
 const repoRoot = path.resolve(__dirname, '..');
@@ -96,7 +98,25 @@ describe('project metadata', () => {
     const hooks = await readJson('hooks/hooks.json');
 
     expect(Object.keys(hooks.hooks)).toEqual(['SessionStart']);
-    expect(hooks.hooks.SessionStart[0].hooks[0].command)
-      .toBe('bash "${CLAUDE_PLUGIN_ROOT:-${extensionPath}}/scripts/session-init.sh"');
+    const command: string = hooks.hooks.SessionStart[0].hooks[0].command;
+
+    const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'obsidian-hook-root-'));
+    try {
+      await fs.mkdir(path.join(pluginRoot, 'scripts'));
+      await fs.writeFile(path.join(pluginRoot, 'scripts', 'session-init.sh'), 'printf %s "$0"');
+      const runHook = (hookCommand: string, env: NodeJS.ProcessEnv) =>
+        execFileSync('bash', ['-c', hookCommand], { encoding: 'utf-8', env: { PATH: process.env.PATH, ...env } });
+      const expected = path.join(pluginRoot, 'scripts', 'session-init.sh');
+
+      // Claude Code and Codex export CLAUDE_PLUGIN_ROOT to the hook process.
+      expect(runHook(command, { CLAUDE_PLUGIN_ROOT: pluginRoot })).toBe(expected);
+
+      // Gemini CLI replaces ${name} tokens in hooks.json with this expression
+      // (hydrateString in Gemini CLI 0.42) and doesn't pass CLAUDE_PLUGIN_ROOT.
+      const geminiCommand = command.replace(/\${(.*?)}/g, (match, key) => (key === 'extensionPath' ? pluginRoot : match));
+      expect(runHook(geminiCommand, {})).toBe(expected);
+    } finally {
+      await fs.rm(pluginRoot, { recursive: true, force: true });
+    }
   });
 });

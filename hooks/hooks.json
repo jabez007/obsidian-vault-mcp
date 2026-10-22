@@ -6,7 +6,7 @@
           {
             "name": "obsidian-session-init",
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${extensionPath}}/scripts/session-init.sh\"",
+            "command": "root=\"${extensionPath}\"; bash \"${CLAUDE_PLUGIN_ROOT:-$root}/scripts/session-init.sh\"",
             "description": "Reports vault status and refreshes the RAG index when a session starts."
           }
         ]

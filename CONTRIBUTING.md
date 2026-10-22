@@ -36,7 +36,7 @@ Thank you for your interest in contributing! We welcome pull requests, bug repor
     - `store.ts`: LanceDB vector store management.
     - `embedder.ts`: Embeddings through `@huggingface/transformers`.
     - `snapshot.ts`: Index snapshot preparation.
-- `skills/`: Skills for Claude Code and Codex.
+- `skills/`: Skills for Claude Code, Codex, and Gemini CLI.
 - `commands/`, `agents/`: Slash commands and agents for Gemini CLI.
 - `hooks/hooks.json`, `scripts/session-init.sh`: The session-start hook that reports vault status and refreshes the RAG index.
 
