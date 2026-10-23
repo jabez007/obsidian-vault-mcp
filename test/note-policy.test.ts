@@ -476,6 +476,8 @@ describe('vault ignore policy', () => {
 
   it('blocks a rule mismatch during final metadata publication without discarding a completed sweep', async () => {
     await write('note.md'); await scan();
+    const later = new Date(Date.now() + 10000);
+    await fs.utimes(path.join(vault, 'note.md'), later, later);
     const cli = path.resolve('dist/index.js');
     await expect(promisify(execFile)(process.execPath, ['-e', `
       const fs = require('node:fs/promises');

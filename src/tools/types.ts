@@ -5,11 +5,14 @@ export type JsonSchema = {
     type: string;
     properties?: Record<string, JsonSchemaProperty>;
     required?: string[];
+    anyOf?: Array<{ required: string[] }>;
 };
 
 export type JsonSchemaProperty = {
-    type: string;
+    type: string | string[];
     description?: string;
+    minLength?: number;
+    pattern?: string;
     enum?: string[];
     items?: {
         type: string;

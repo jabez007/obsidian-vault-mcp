@@ -141,6 +141,19 @@ describe('index snapshots', () => {
     expect(await inventory(first.snapshotPath)).toEqual(before);
   });
 
+  it.each(['compact', 'pretty'])('preserves unchanged metadata bytes and mtime with %s JSON', async layout => {
+    await seed();
+    const metadataPath = path.join(store, 'index-metadata.json');
+    const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
+    const bytes = JSON.stringify(metadata, null, layout === 'pretty' ? 2 : undefined) + '\n';
+    await fs.writeFile(metadataPath, bytes);
+    await fs.utimes(metadataPath, new Date(1000), new Date(1000));
+    const beforeStat = await fs.stat(metadataPath);
+    expect(await indexer.indexVault(vault, false, tmp, 'snapshot')).toMatchObject({ success: true, chunks: 0 });
+    expect(await fs.readFile(metadataPath, 'utf8')).toBe(bytes);
+    expect((await fs.stat(metadataPath)).mtimeMs).toBe(beforeStat.mtimeMs);
+  });
+
   it.each(['', ' \n\t ', '---\ntags: [garden]\n---\n'])(
     'exports successfully after indexing a note with no embeddable content: %j', async content => {
       await seed();
@@ -172,10 +185,16 @@ describe('index snapshots', () => {
       .toEqual({ 'note.md': hashes['note.md'], 'moved.md': hashes['empty.md'] });
   });
 
-  it.each(['missing metadata', 'timestamp-only touch'])(
+  it.each(['missing metadata', 'missing version', 'timestamp-only touch'])(
     'still reconciles freshness on an unchanged scan after %s', async change => {
       await seed();
       if (change === 'missing metadata') await fs.unlink(path.join(store, 'index-metadata.json'));
+      else if (change === 'missing version') {
+        const metadataPath = path.join(store, 'index-metadata.json');
+        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
+        delete metadata.metadataVersion;
+        await fs.writeFile(metadataPath, JSON.stringify(metadata));
+      }
       else {
         const later = new Date(Date.now() + 10000);
         await fs.utimes(path.join(vault, 'note.md'), later, later);
@@ -186,6 +205,20 @@ describe('index snapshots', () => {
       expect((await indexer.checkIndexStaleness(vault, tmp, 'snapshot')).stale).toBe(false);
       expect((await prepare()).validation.rows).toBe(1);
     });
+
+  it('detects changed rules during an unchanged scan without rewriting metadata', async () => {
+    await seed();
+    const metadataPath = path.join(store, 'index-metadata.json');
+    const before = await fs.readFile(metadataPath, 'utf8');
+    const prototype = await tablePrototype();
+    const listIndices = prototype.listIndices;
+    vi.spyOn(prototype, 'listIndices').mockImplementationOnce(async function(this: any, ...args: any[]) {
+      await fs.writeFile(path.join(vault, '.obsidian-mcpignore'), '/drafts/');
+      return listIndices.apply(this, args);
+    });
+    await expect(indexer.indexVault(vault, false, tmp, 'snapshot')).rejects.toThrow('changed during');
+    expect(await fs.readFile(metadataPath, 'utf8')).toBe(before);
+  });
 
   it('leaves a published export unchanged while the live database changes and is cleaned up during copying', async () => {
     await seed(2);

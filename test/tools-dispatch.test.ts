@@ -87,7 +87,7 @@ describe('tool registry dispatch', () => {
       description: 'Force full re-index, ignoring cached file hashes (default: false)',
     });
     expect(response.tools.find((tool) => tool.name === 'obsidian_rag_query')?.inputSchema.properties?.entities).toEqual({
-      type: 'array',
+      type: ['array', 'string'],
       description: 'Optional entity labels to require in matching chunks. Matched exactly (case-sensitive); comma-separated for CLI',
       items: { type: 'string' },
     });
@@ -203,11 +203,13 @@ describe('tool registry dispatch', () => {
   it('rejects malformed RAG filters instead of silently searching unfiltered', async () => {
     const { context, indexer } = await createFakeContext();
 
-    await expect(dispatchMcpTool(
+    const result = await dispatchMcpTool(
       'obsidian_rag_query',
       { query: 'needle', entities: [42] },
       context,
-    )).rejects.toThrow("'entities' must be an array of strings");
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('entities must contain only string values');
     expect(indexer.search).not.toHaveBeenCalled();
   });
 
