@@ -1,3 +1,4 @@
+import { NotePolicyError } from "../note-policy.js";
 import {
     callRegistryTool,
     getKnownToolNames,
@@ -29,8 +30,12 @@ export async function dispatchMcpTool(
     args: ToolArguments | undefined,
     context: ToolContext,
 ) {
-    const text = await callRegistryTool(name, args, context);
-    if (name === "obsidian_prepare_index_snapshot" && JSON.parse(text).success === false) {
+    let text: string;
+    try { text = await callRegistryTool(name, args, context); } catch (error) {
+        if (!(error instanceof NotePolicyError)) throw error;
+        return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: { code: error.code, message: error.message } }) }], isError: true };
+    }
+    if (["obsidian_prepare_index_snapshot", "obsidian_rag_index"].includes(name) && JSON.parse(text).success === false) {
         return { content: [{ type: "text" as const, text }], isError: true };
     }
     return { content: [{ type: "text" as const, text }] };
@@ -74,11 +79,20 @@ export function parseCliToolArgs(tool: ObsidianTool, rawArgs: string[]) {
         const current = rawArgs[i];
         if (!current?.startsWith("--")) continue;
 
-        const key = current.substring(2);
+        const equalsIndex = current.indexOf("=");
+        const key = current.substring(2, equalsIndex === -1 ? undefined : equalsIndex);
+        if (equalsIndex !== -1) {
+            parsedArgs[key] = parseCliValue(tool, key, current.substring(equalsIndex + 1));
+            continue;
+        }
         if (i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith("--")) {
             parsedArgs[key] = parseCliValue(tool, key, rawArgs[i + 1]);
             i++;
         } else {
+            const propertyType = getPropertyType(tool, key);
+            if (propertyType && propertyType !== "boolean" && !EXTRA_BOOLEAN_CLI_KEYS.has(key)) {
+                throw new Error(`--${key} requires a value. Use --${key}=VALUE for values beginning with --.`);
+            }
             parsedArgs[key] = parseCliValue(tool, key, true);
         }
     }
@@ -134,7 +148,7 @@ export async function dispatchCliTool(
         const output = await callRegistryTool(toolName, args, context);
         return {
             handled: true,
-            exitCode: toolName === "obsidian_prepare_index_snapshot" && JSON.parse(output).success === false ? 1 : 0,
+            exitCode: ["obsidian_prepare_index_snapshot", "obsidian_rag_index"].includes(toolName) && JSON.parse(output).success === false ? 1 : 0,
             output,
         };
     } catch (error: any) {

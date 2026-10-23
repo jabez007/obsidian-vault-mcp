@@ -388,7 +388,7 @@ describe('VaultIndexer path resolution and storage', () => {
     const hashes = JSON.parse(await fs.readFile(hashPath, 'utf-8'));
     expect(Object.keys(hashes)).toEqual(['ok.md']);
 
-    // The freshness metadata is withheld, so queries keep warning.
+    // Failed content is recorded separately from policy reconciliation, so queries keep warning.
     await expect(indexer.checkIndexStaleness(vaultPath, workspacePath)).resolves.toMatchObject({ stale: true });
   });
 

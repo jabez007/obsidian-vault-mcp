@@ -1,6 +1,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import { glob } from "glob";
+import { assertNoteMutationAllowed, discoverNotes, loadNotePolicy, NotePolicy, NotePolicyError } from "../note-policy.js";
 import { getOrCreateDailyNote } from "../daily-note.js";
 import {
     applyFrontmatterUpdate,
@@ -23,19 +23,10 @@ async function reindexNoteAfterWrite(
     vaultId?: string | null,
 ) {
     try {
-        const result = (await context.indexer.indexFile(
-            vaultPath,
-            relativePath,
-            workspacePath,
-            vaultId,
-        )) as { success?: boolean; message?: string };
-        if (!result.success) {
-            console.error(
-                `Post-write reindex failed for ${relativePath}: ${result.message ?? "unknown error"}`,
-            );
-        }
+        const result = await context.indexer.indexFile(vaultPath, relativePath, workspacePath, vaultId) as { success?: boolean; message?: string };
+        return result.success ? "" : `\nNote saved, but indexing failed: ${result.message ?? "unknown error"}`;
     } catch (error) {
-        console.error(`Post-write reindex failed for ${relativePath}`, error);
+        return `\nNote saved, but indexing failed: ${String(error)}`;
     }
 }
 
@@ -47,27 +38,11 @@ async function reindexMovedNote(
     workspacePath?: string | null,
     vaultId?: string | null,
 ) {
-    const result = (await context.indexer.moveFile(
-        vaultPath,
-        sourceRelativePath,
-        destRelativePath,
-        workspacePath,
-        vaultId,
-    )) as { success?: boolean; message?: string };
-    if (!result.success) {
-        const message = result.message ?? "unknown error";
-        // The file is already renamed on disk at this point. A schema
-        // migration pending on the whole index is not a reason to report the
-        // move itself as failed — log it and let the forced reindex catch up.
-        if (message.includes("force_reindex=true")) {
-            console.error(
-                `Post-move reindex skipped for ${sourceRelativePath} -> ${destRelativePath}: ${message}`,
-            );
-            return;
-        }
-        throw new Error(
-            `Post-move reindex failed for ${sourceRelativePath} -> ${destRelativePath}: ${message}`,
-        );
+    try {
+        const result = await context.indexer.moveFile(vaultPath, sourceRelativePath, destRelativePath, workspacePath, vaultId) as { success?: boolean; message?: string };
+        return result.success ? "" : `\nNote moved, but indexing failed: ${result.message ?? "unknown error"}`;
+    } catch (error) {
+        return `\nNote moved, but indexing failed: ${String(error)}`;
     }
 }
 
@@ -100,18 +75,6 @@ function stringArrayArg(argName: string, value: unknown): string[] {
             .filter((item) => item.length > 0);
     }
     throw new Error(`'${argName}' must be an array of strings or a comma-separated string.`);
-}
-
-function filterSafeVaultFiles(vaultPath: string, files: string[]): string[] {
-    return files.filter((file) => {
-        try {
-            getSafeFilePath(vaultPath, file);
-            return true;
-        } catch (error: any) {
-            console.error(`Skipping out-of-bounds vault file ${file}: ${error?.message ?? String(error)}`);
-            return false;
-        }
-    });
 }
 
 export const obsidianTools: ObsidianTool[] = [
@@ -187,11 +150,9 @@ export const obsidianTools: ObsidianTool[] = [
         },
         async handler(args, context) {
             const vaultPath = context.getVaultPath(args.vault_path);
+            const policy = context.notePolicy ?? await loadNotePolicy(vaultPath);
             const pattern = listNotesPattern(optionalString(args.subfolder));
-            const files = filterSafeVaultFiles(
-                vaultPath,
-                await glob(pattern, { cwd: vaultPath, follow: true }),
-            );
+            const files = await discoverNotes(vaultPath, policy, pattern);
             return (
                 JSON.stringify(files.slice(0, 100), null, 2) +
                 (files.length > 100 ? `\n...and ${files.length - 100} more.` : "")
@@ -279,14 +240,14 @@ export const obsidianTools: ObsidianTool[] = [
                 }
                 throw error;
             }
-            await reindexNoteAfterWrite(
+            const indexWarning = await reindexNoteAfterWrite(
                 context,
                 vaultPath,
                 relativePath,
                 workspacePath,
                 vaultId,
             );
-            return `Created note: ${args.file_path}`;
+            return `Created note: ${args.file_path}${indexWarning}`;
         },
     },
     {
@@ -323,14 +284,14 @@ export const obsidianTools: ObsidianTool[] = [
             const filePath = getSafeFilePath(vaultPath, relativePath);
             const content = String(args.content || "");
             await fs.appendFile(filePath, "\n" + content, "utf-8");
-            await reindexNoteAfterWrite(
+            const indexWarning = await reindexNoteAfterWrite(
                 context,
                 vaultPath,
                 relativePath,
                 workspacePath,
                 vaultId,
             );
-            return `Appended to note: ${args.file_path}`;
+            return `Appended to note: ${args.file_path}${indexWarning}`;
         },
     },
     {
@@ -367,11 +328,9 @@ export const obsidianTools: ObsidianTool[] = [
         },
         async handler(args, context) {
             const vaultPath = context.getVaultPath(args.vault_path);
+            const policy = context.notePolicy ?? await loadNotePolicy(vaultPath);
             const query = String(args.query).toLowerCase();
-            const files = filterSafeVaultFiles(
-                vaultPath,
-                await glob("**/*.md", { cwd: vaultPath, follow: true }),
-            );
+            const files = await discoverNotes(vaultPath, policy);
             const matches: string[] = [];
             for (const file of files) {
                 if (matches.length >= 20) break;
@@ -457,6 +416,7 @@ export const obsidianTools: ObsidianTool[] = [
         inputSchema: {
             type: "object",
             properties: {
+                rules_text: { type: "string", description: "Optional staged ignore-file text. Must match the current rules and the reconciled index." },
                 vault_path: { type: "string", description: "Optional vault path override" },
                 workspace_path: { type: "string", description: "Optional workspace path override" },
                 vault_id: { type: "string", description: "Optional unique identifier for the vault" },
@@ -468,6 +428,7 @@ export const obsidianTools: ObsidianTool[] = [
                     context.getVaultPath(args.vault_path),
                     context.getWorkspacePath(args.workspace_path),
                     context.getVaultId(args.vault_id),
+                    optionalString(args.rules_text),
                 ));
             } catch (error) {
                 return JSON.stringify({ success: false, error: {
@@ -527,10 +488,12 @@ export const obsidianTools: ObsidianTool[] = [
                 entities: stringArrayArg("entities", args.entities),
                 communities: stringArrayArg("communities", args.communities),
             };
-            const [staleness, results] = await Promise.all([
-                context.indexer.checkIndexStaleness(vaultPath, workspacePath, vaultId),
-                context.indexer.search(query, vaultPath, limit, workspacePath, vaultId, filters),
-            ]);
+            const results = await context.indexer.search(query, vaultPath, limit, workspacePath, vaultId, filters);
+            const policy = context.notePolicy ?? await loadNotePolicy(vaultPath);
+            if (results.some(result => !policy.includes(String(result.path)))) {
+                throw new NotePolicyError("Index contains excluded paths. Run obsidian_rag_index before querying.", "INDEX_POLICY_MISMATCH");
+            }
+            const staleness = await context.indexer.checkIndexStaleness(vaultPath, workspacePath, vaultId);
             const text = results
                 .map((result) => {
                     const heading = typeof result.heading_path === "string" && result.heading_path.length > 0
@@ -565,15 +528,13 @@ export const obsidianTools: ObsidianTool[] = [
         },
         async handler(args, context) {
             const vaultPath = context.getVaultPath(args.vault_path);
+            const policy = context.notePolicy ?? await loadNotePolicy(vaultPath);
             const target = String(args.file_name).replace(/\.md$/i, "");
             const linkRegex = new RegExp(
                 `\\[\\[${target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([\\]\\|#])`,
                 "i",
             );
-            const files = filterSafeVaultFiles(
-                vaultPath,
-                await glob("**/*.md", { cwd: vaultPath, follow: true }),
-            );
+            const files = await discoverNotes(vaultPath, policy);
             const backlinks: string[] = [];
             const batchSize = 50;
 
@@ -687,7 +648,7 @@ export const obsidianTools: ObsidianTool[] = [
 
             await fs.mkdir(path.dirname(dest), { recursive: true });
             await fs.rename(source, dest);
-            await reindexMovedNote(
+            const indexWarning = await reindexMovedNote(
                 context,
                 vaultPath,
                 sourceRelativePath,
@@ -695,7 +656,7 @@ export const obsidianTools: ObsidianTool[] = [
                 workspacePath,
                 vaultId,
             );
-            return `Moved ${args.source_path} to ${args.dest_path}`;
+            return `Moved ${args.source_path} to ${args.dest_path}${indexWarning}`;
         },
     },
     {
@@ -763,14 +724,14 @@ export const obsidianTools: ObsidianTool[] = [
                 applyFrontmatterUpdate(fileContent, updateArg),
                 "utf-8",
             );
-            await reindexNoteAfterWrite(
+            const indexWarning = await reindexNoteAfterWrite(
                 context,
                 vaultPath,
                 relativePath,
                 workspacePath,
                 vaultId,
             );
-            return `Updated frontmatter in ${args.file_path}`;
+            return `Updated frontmatter in ${args.file_path}${indexWarning}`;
         },
     },
     {
@@ -826,14 +787,14 @@ export const obsidianTools: ObsidianTool[] = [
                 replaceSection(fileContent, range, content),
                 "utf-8",
             );
-            await reindexNoteAfterWrite(
+            const indexWarning = await reindexNoteAfterWrite(
                 context,
                 vaultPath,
                 relativePath,
                 workspacePath,
                 vaultId,
             );
-            return `Replaced section "${heading}" in ${args.file_path}`;
+            return `Replaced section "${heading}" in ${args.file_path}${indexWarning}`;
         },
     },
     {
@@ -888,14 +849,14 @@ export const obsidianTools: ObsidianTool[] = [
                 insertAtHeading(fileContent, heading, content, position, range),
                 "utf-8",
             );
-            await reindexNoteAfterWrite(
+            const indexWarning = await reindexNoteAfterWrite(
                 context,
                 vaultPath,
                 relativePath,
                 workspacePath,
                 vaultId,
             );
-            return `Inserted content under "${heading}" in ${args.file_path}`;
+            return `Inserted content under "${heading}" in ${args.file_path}${indexWarning}`;
         },
     },
     {
@@ -945,14 +906,14 @@ export const obsidianTools: ObsidianTool[] = [
                 String(args.new_text ?? ""),
             );
             await fs.writeFile(filePath, updated, "utf-8");
-            await reindexNoteAfterWrite(
+            const indexWarning = await reindexNoteAfterWrite(
                 context,
                 vaultPath,
                 relativePath,
                 workspacePath,
                 vaultId,
             );
-            return `Replaced text in ${args.file_path}`;
+            return `Replaced text in ${args.file_path}${indexWarning}`;
         },
     },
     {
@@ -975,17 +936,12 @@ export const obsidianTools: ObsidianTool[] = [
         },
         async handler(args, context) {
             const vaultPath = context.getVaultPath(args.vault_path);
+            const policy = context.notePolicy ?? await loadNotePolicy(vaultPath);
             const pattern = listNotesPattern(optionalString(args.subfolder));
-            const files = filterSafeVaultFiles(
-                vaultPath,
-                await glob(pattern, { cwd: vaultPath, follow: true }),
-            );
-            const allFiles = filterSafeVaultFiles(
-                vaultPath,
-                await glob("**/*.md", { cwd: vaultPath, follow: true }),
-            );
+            const files = await discoverNotes(vaultPath, policy, pattern);
+            const allFiles = await discoverNotes(vaultPath, new NotePolicy(''));
             const nameSet = new Set(
-                allFiles.map((file) => path.basename(file, ".md").toLowerCase()),
+                allFiles.flatMap((file) => [path.basename(file, ".md").toLowerCase(), file.replace(/\.md$/, "").toLowerCase()]),
             );
             const targetMap = new Map<string, string[]>();
             for (const file of files) {
@@ -1038,5 +994,23 @@ export async function callRegistryTool(
     if (!tool) {
         throw new Error(`Unknown tool: ${name}`);
     }
-    return tool.handler(args ?? {}, context);
+    const input = args ?? {};
+    const mutations = new Set([
+        "obsidian_create_note", "obsidian_append_note", "obsidian_update_frontmatter",
+        "obsidian_replace_section", "obsidian_insert_at_heading", "obsidian_replace_in_note",
+    ]);
+    if (mutations.has(name) || name === "obsidian_move_note") {
+        const vaultPath = context.getVaultPath(input.vault_path);
+        const paths = name === "obsidian_move_note" ? [input.source_path, input.dest_path] : [input.file_path];
+        for (const target of paths) assertNoteMutationAllowed(vaultPath, String(target));
+    }
+    const discovery = new Set(["obsidian_list_notes", "obsidian_search_notes", "obsidian_get_backlinks", "obsidian_get_broken_links", "obsidian_rag_query"]);
+    if (discovery.has(name)) {
+        const vaultPath = context.getVaultPath(input.vault_path);
+        const policy = await loadNotePolicy(vaultPath);
+        const result = await tool.handler(input, { ...context, notePolicy: policy });
+        await policy.assertUnchanged(vaultPath);
+        return result;
+    }
+    return tool.handler(input, context);
 }

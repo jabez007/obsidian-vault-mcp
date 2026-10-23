@@ -23,56 +23,44 @@ This project integrates your **Obsidian Vault** into Claude Code, Codex CLI, Ope
 
 ## Installation
 
-Claude Code and OpenCode can run this server directly from a local checkout. The Codex, Gemini, and generic MCP manifests keep the package-based launch shape used by earlier releases.
+Every host runs the same MCP server. The Claude Code, Codex, and Gemini CLI plugins also add skills and a session-start hook that reports vault status and refreshes the RAG index. Other hosts run the npm package with `npx`.
 
-### Claude Code plugin
+### Claude Code
 
-This repo is a Claude Code plugin marketplace. From Claude Code, add the marketplace and install the plugin:
+Add this repository as a plugin marketplace and install the plugin:
 
 ```text
-/plugin marketplace add https://github.com/jabez007/obsidian-vault-mcp.git
+/plugin marketplace add jabez007/obsidian-vault-mcp
 /plugin install obsidian-vault-mcp@obsidian-vault-mcp
 ```
 
-For local development or testing from a checkout:
+When Claude Code installs or updates the plugin, it installs the npm dependencies from `package-lock.json` into its copy of the plugin. The server then runs the committed `dist/index.js` with `node`. If `/plugin` reports that the plugin's packages are not installed, run `/plugin update obsidian-vault-mcp@obsidian-vault-mcp` to retry the install.
+
+To add only the MCP server, without skills or the hook:
 
 ```sh
-claude plugin validate .
-claude plugin marketplace add . --scope local
-claude plugin install obsidian-vault-mcp@obsidian-vault-mcp --scope local
+claude mcp add obsidian-vault-mcp -- npx -y @jabez007/obsidian-vault-mcp@2
 ```
 
-The Claude marketplace uses `.claude-plugin/marketplace.json` and installs the generated wrapper under `plugins/claude-obsidian-vault-mcp/`. That wrapper is generated from `.claude-plugin/plugin.json`, `.claude-plugin/mcp.json`, `.claude-plugin/hooks.json`, root `skills/`, `scripts/session-init.sh`, `scripts/session-index.mjs`, `scripts/claude-mcp-server.sh`, `package.json`, `package-lock.json`, and `dist/index.js`. The MCP server runs through `scripts/claude-mcp-server.sh`, which installs production dependencies into Claude's `${CLAUDE_PLUGIN_DATA}` directory before launching the bundled server. The `SessionStart` hook runs `scripts/session-init.sh`, which reports vault status and refreshes the RAG index when a vault is configured.
+### Codex
 
-The Claude launcher requires Bash, `sha256sum`, and `flock`. On Linux, `flock` is provided by util-linux. Concurrent launches share an install lock and recheck the dependency stamp after waiting. The lock is released before the server starts. `OBSIDIAN_INSTALL_LOCK_WAIT_SECONDS` sets the maximum wait, in seconds, and defaults to `120`.
-
-### Codex CLI plugin
-
-This repo includes a repo-scoped Codex marketplace at `.agents/plugins/marketplace.json` and a dedicated plugin wrapper at `plugins/obsidian-vault-mcp/`. Open Codex in this repository, restart if it was already running, and install the plugin from the repo marketplace:
-
-```text
-/plugins
-```
-
-Look for the `Obsidian Vault MCP Repo` marketplace and install `Obsidian Vault`.
-
-If you want to use this repository as a marketplace source from outside the repo checkout, add it explicitly:
+Add this repository as a plugin marketplace:
 
 ```sh
-codex plugin marketplace add /absolute/path/to/obsidian-vault-mcp
+codex plugin marketplace add jabez007/obsidian-vault-mcp
+```
+
+Then open `/plugins` in Codex, choose the `Obsidian Vault MCP Repo` marketplace, and install `Obsidian Vault`. The plugin runs the server with `npx`. Codex asks you to review and trust the plugin's session hook before it runs.
+
+To add only the MCP server:
+
+```sh
+codex mcp add obsidian-vault-mcp -- npx -y @jabez007/obsidian-vault-mcp@2
 ```
 
 ### OpenCode
 
-Build the local checkout, then start OpenCode from this repo so it can use the included `opencode.json`:
-
-```sh
-npm install
-npm run build
-opencode
-```
-
-The config uses OpenCode's `mcp` format:
+Add the server to `opencode.json` in your project or to `~/.config/opencode/opencode.json`:
 
 ```json
 {
@@ -80,8 +68,7 @@ The config uses OpenCode's `mcp` format:
   "mcp": {
     "obsidian-vault-mcp": {
       "type": "local",
-      "command": ["node", "dist/index.js"],
-      "cwd": ".",
+      "command": ["npx", "-y", "@jabez007/obsidian-vault-mcp@2"],
       "enabled": true,
       "timeout": 30000
     }
@@ -89,36 +76,34 @@ The config uses OpenCode's `mcp` format:
 }
 ```
 
-After OpenCode starts, ask it to use the `obsidian-vault-mcp` tools, for example: `Index my Obsidian vault using obsidian-vault-mcp`.
-
-### Gemini CLI extension
-
-Gemini compatibility remains in place through `gemini-extension.json`:
+### Gemini CLI
 
 ```sh
 gemini extensions install https://github.com/jabez007/obsidian-vault-mcp
 ```
 
-The extension manifest uses the package-based MCP launch shape from earlier releases, so no in-extension install step is required once that package is available to `npx`.
+The extension uses `gemini-extension.json`, which runs the server with `npx`, plus `skills/`, `commands/`, `agents/`, and the shared session hook. CI doesn't test the Gemini extension.
 
-### Generic MCP host configuration
+### Antigravity and other MCP hosts
 
-For other MCP-capable hosts using a local checkout, build this repo and add this server configuration:
+Add this server to the host's MCP configuration:
 
 ```json
 {
   "mcpServers": {
     "obsidian-vault-mcp": {
-      "command": "node",
-      "args": ["/absolute/path/to/obsidian-vault-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@jabez007/obsidian-vault-mcp@2"]
     }
   }
 }
 ```
 
+To run a local checkout instead, use `"command": "node"` and `"args": ["/absolute/path/to/obsidian-vault-mcp/dist/index.js"]`.
+
 ### Local development
 
-For local development, build the server in this checkout and run it directly:
+Build the server in a checkout and run it directly:
 
 ```sh
 npm install
@@ -126,7 +111,7 @@ npm run build
 node dist/index.js
 ```
 
-The packaged manifests use `npx`. Hook scripts can be pointed at a local build with:
+To try the Claude Code plugin from a checkout, run `claude plugin validate .` and start Claude Code with `claude --plugin-dir .`. The session hook uses the checkout's build when `node_modules/@lancedb/lancedb` exists, and otherwise runs the published npm package. To point the hook at another build, set:
 
 ```sh
 export OBSIDIAN_MCP_SERVER_COMMAND="node /absolute/path/to/obsidian-vault-mcp/dist/index.js"
@@ -191,13 +176,50 @@ The first time you use a tool, the server can persist `vault_path`, `workspace_p
 - **Cache Reset**: If you suspect the index is corrupted or want a fresh start, you can manually delete the vault-specific folder (`.obsidian-vault-mcp/vaults/<vault_identifier>`) in your workspace or the corresponding entry in the global cache. The next time you run `obsidian_rag_index`, it will be recreated.
 - **Rebuild After Upgrading to 2.0.0**: version 2.0.0 replaced the embedding library (`@xenova/transformers` → `@huggingface/transformers`). Existing indexes still load — the model and its 384 dimensions are unchanged — but vectors embedded by the new stack are not numerically identical to old ones, so an index mixing pre- and post-upgrade chunks quietly degrades ranking quality. Run a one-time full rebuild after upgrading: `npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index --force_reindex`.
 - **Index Schema Migrations**: The index layout is stamped with a schema version (`schema-version.json`). After an upgrade that changes the layout (for example, the clean-text/heading-breadcrumb columns), both indexing and querying refuse with a message asking for a one-time `obsidian_rag_index` run with `force_reindex=true`; the rebuild restamps the version and everything resumes normally.
-- **Index Coordination & Freshness**: Each vault index directory uses an advisory `index.lock` so the session hook and MCP server do not update LanceDB and `file-hashes.json` at the same time. Queries compare markdown file counts and mtimes against the last successful index metadata; if files changed directly in Obsidian, `obsidian_rag_query` may append a stale-index notice asking you to run `obsidian_rag_index`. Restores that preserve both the file count and older timestamps (e.g. `git checkout`, sync rollbacks) are not detected by this heuristic — run `obsidian_rag_index` with `force_reindex` after those.
-- **Module Not Found Error**: If you see an error like `Cannot find module '@lancedb/lancedb'`, launch through `npx -y @jabez007/obsidian-vault-mcp@2` so npm installs runtime dependencies automatically. For local development, run `npm install && npm run build`.
+- **Index Coordination & Freshness**: Each vault index directory uses an advisory `index.lock` to coordinate queries, indexing, and snapshot preparation across processes. Queries wait for an active writer or exporter, subject to `OBSIDIAN_INDEX_LOCK_WAIT_MS`, which defaults to 30 seconds. Queries compare markdown file counts and mtimes against the last successful index metadata. Changes made directly in Obsidian can produce results with a stale-index notice. Restores that preserve both the file count and older timestamps remain invisible to this heuristic. Run `obsidian_rag_index` with `force_reindex` after those restores. Ignore-rule changes have a separate fingerprint check and block queries until reconciliation succeeds.
+- **Module Not Found Error**: If you see an error like `Cannot find module '@lancedb/lancedb'` in the Claude Code plugin, run `/plugin update obsidian-vault-mcp@obsidian-vault-mcp` to retry the dependency install. On other hosts, launch through `npx -y @jabez007/obsidian-vault-mcp@2` so npm installs runtime dependencies. For local development, run `npm install && npm run build`.
 - **Logs**: Since this runs as an MCP server, errors are typically output to stderr.
 
 If the session hook reports `RAG index refresh failed`, open the log path included in its message. The hook keeps the five newest failure logs, each limited to the last 64 KiB of diagnostics, under `${CLAUDE_PLUGIN_DATA}/logs`. Other hosts use `${XDG_STATE_HOME}/obsidian-vault-mcp/logs`, or `~/.local/state/obsidian-vault-mcp/logs` when `XDG_STATE_HOME` is unset. Logs include stderr, the CLI response, and exit status. Successful runs do not retain a log.
 
 Search indexes lowercase `.md` files outside hidden files and directories. This rule applies to vault scans, individual writes, and moves. Tools can still create text configuration files such as `.base` or `.yaml`; those files are excluded from search. Rewriting an excluded file removes any old rows for that path. A vault scan also reconciles old excluded entries and deleted files.
+
+### Exclude notes from discovery and indexing
+
+An optional `.obsidian-mcpignore` file at the vault root excludes visible notes and folders from default discovery and search. For example:
+
+```gitignore
+# Keep these folders visible in Obsidian and tracked in Git.
+/drafts/
+/templates/
+sources/**/raw*.md
+```
+
+Rules use the `ignore` library's gitignore matching semantics, with case-sensitive matching on every platform. On a case-insensitive volume, the default on macOS and Windows, an explicit write or move checks and indexes a note under the spelling stored on disk. A write to `Drafts/x.md` therefore can't index a note stored as `drafts/x.md` past a `/drafts/` rule. They support blank lines, comments starting with `#`, leading `/` anchors, trailing `/` directory rules, `*`, and `**`. Candidate paths use `/` separators. Backslashes in patterns retain their escaping meaning. Escape a literal leading `!` or `#` as `\!` or `\#`. Unescaped leading `!` negation is unsupported. Patterns that match nothing are valid. Hidden paths and files without a lowercase `.md` suffix always remain excluded.
+
+The rules apply to `obsidian_list_notes`, `obsidian_search_notes`, `obsidian_get_backlinks`, `obsidian_get_broken_links`, RAG indexing, and snapshot preparation. An ignored note still counts as an existing wikilink target. Explicit reads and edits by path continue to work, and ignored notes remain excluded from the index after edits. Moving a note into an ignored folder removes its indexed rows. Moving it out indexes the destination.
+
+Match symlinked notes by the vault-relative path used to address or discover them. Ignoring one path does not exclude another alias to the same file. Existing real-path boundary checks still apply. Rules are loaded separately for each vault and each operation.
+
+Edit `.obsidian-mcpignore` directly. Note tools refuse to create, edit, overwrite, or move it, including through symlink aliases and differently cased names such as `.OBSIDIAN-MCPIGNORE`. A missing file means no additional exclusions. Unreadable files, dangling policy symlinks, invalid UTF-8, NUL characters, and unsupported negation cause indexing and discovery to fail. Errors identify the file and, for invalid rule lines, the line number. Invalid rules do not change index rows. Explicit note edits still save, with a warning that indexing failed.
+
+### Reconcile rule changes and upgrade existing indexes
+
+`index-metadata.json` format version 2 records `rulesFingerprint` and `policyReconciled` for row eligibility. It also records `pendingPaths` for interrupted row writes and `failedPaths` for content that could not be indexed. The SHA-256 fingerprint covers the ordered rule lines and a version for matching semantics and built-in exclusions. Normalization removes an optional UTF-8 BOM, normalizes line endings, and discards comments and blank lines. It preserves meaningful whitespace and escapes. Missing, empty, and comment-only ignore files have the same fingerprint.
+
+After changing rules, run a whole-vault scan:
+
+```sh
+node dist/index.js obsidian_rag_index
+```
+
+Queries return an error requesting this scan when the fingerprint is missing or different, or reconciliation is incomplete. MCP sets `isError: true`, and CLI exits nonzero. Single-note updates and moves cannot certify a whole index under new rules. A successful scan removes newly excluded paths and indexes newly included notes even when their contents and mtimes did not change.
+
+Each operation captures one ruleset. Queries and discovery recheck the rules before returning content, and snapshot preparation rechecks before publishing. If rules change during the operation, it fails with a retry message. A whole-vault sweep removes excluded and orphaned rows, then records the reconciled rules even if some notes cannot be read or embedded. An unfinished eligibility sweep blocks queries. Content failures and interrupted row writes produce a stale-index notice while queries remain available for eligible rows. Before changing rows, the indexer saves the affected paths in `pendingPaths`. It clears each completed path only after saving its matching file hash. Recovery re-embeds pending paths and notes whose contents changed, while unchanged notes keep their embeddings. Snapshot export refuses pending or failed updates until a scan or a successful note update resolves them.
+
+Existing indexes require one normal whole-vault scan after this upgrade, even without an ignore file. The scan reuses unchanged embeddings, including after an MCP note edit during the upgrade. The notes table schema remains version 3. Old snapshots without rule metadata cannot satisfy the new query and export checks. Reconcile the source index and prepare a new snapshot before sharing it. Receiving-side snapshot activation remains part of issue #24.
+
+Ignore rules affect discovery and indexing only. They do not control access by explicit path, Git tracking, or shell access. They do not remove content from earlier snapshots or Git and Git LFS history.
 
 ## Prepare an index for sharing
 
@@ -214,9 +236,23 @@ You can omit these arguments to use the configured vault, workspace, and vault I
 
 ### Snapshot contract
 
-The command returns JSON with `success`, `snapshotPath`, `sourceFingerprint`, `sourceVersion`, and `reused`. The output directory is `<vault-storage>/snapshots/<sourceFingerprint>/`. It contains `lancedb/`, `file-hashes.json`, `schema-version.json`, `index-metadata.json`, and `snapshot.json`. The manifest records payload file hashes and validation results. Locks and unfinished metadata writes are excluded.
+The command returns JSON with `success`, `snapshotPath`, `sourceFingerprint`, `rulesFingerprint`, `sourceVersion`, and `reused`. The output directory is `<vault-storage>/snapshots/<sourceFingerprint>/`. It contains `lancedb/`, `file-hashes.json`, `schema-version.json`, `index-metadata.json`, and `snapshot.json`. Snapshot manifest policy version 2 records `rulesFingerprint`, payload file hashes, and validation results. `sourceFingerprint` includes the rules fingerprint. Preparation checks every exported row against the current rules. Locks and unfinished metadata writes are excluded.
 
-Preparation holds the shared index lock while it copies and validates the index. It maintains the private copy and publishes the final directory only after validation succeeds. Live queries can continue because preparation does not prune the live database. A live local process's lock never expires solely because it is old. On Linux, the lock records the boot ID and process start time so a reused PID cannot retain a dead owner's lock. When this identity is unavailable, including on other platforms and in older locks, the existing process-liveness check remains in effect. A lock from another host requires explicit resolution after confirming that its owner has stopped. `OBSIDIAN_INDEX_LOCK_WAIT_MS` controls the wait, with a default of 30 seconds.
+The optional `rules_text` argument checks a caller-supplied ruleset against both the current vault rules and the reconciled index. Run the hook from the vault root, including when the vault is a repository subfolder. Replace the server path below with your built checkout:
+
+```sh
+staged_entry=$(git ls-files --stage -- .obsidian-mcpignore) || exit 1
+if [ -n "$staged_entry" ]; then
+	staged_rules=$(git show :./.obsidian-mcpignore) || exit 1
+else
+	staged_rules=
+fi
+node /absolute/path/to/obsidian-vault-mcp/dist/index.js obsidian_prepare_index_snapshot --rules_text="$staged_rules"
+```
+
+The index lookup returns an empty string when the ignore file is not staged, and Git errors stop the hook. `:./` resolves the staged path relative to the vault root. The `--rules_text=...` form preserves empty text and rules beginning with `--`; CLI options that require values reject missing values. Unstaged or partly staged rule changes that alter the fingerprint cause preparation to fail. Comments and line-ending differences do not change the fingerprint. Existing exports with an older manifest policy version must be regenerated from a reconciled index.
+
+Preparation holds the shared index lock while it copies and validates the index. It maintains the private copy and publishes the final directory only after validation succeeds. Queries wait for preparation to release the lock. Preparation does not prune the live database. A live local process's lock never expires solely because it is old. On Linux, the lock records the boot ID and process start time so a reused PID cannot retain a dead owner's lock. When this identity is unavailable, including on other platforms and in older locks, the existing process-liveness check remains in effect. A lock from another host requires explicit resolution after confirming that its owner has stopped. `OBSIDIAN_INDEX_LOCK_WAIT_MS` controls the wait, with a default of 30 seconds.
 
 Published exports remain unchanged when the live database changes or undergoes maintenance. An unchanged source reuses the same export after checking its file hashes. A modified export causes an error instead of being overwritten. The command never automatically deletes older published exports. Remove them only after all staging or copying operations using them have finished. A killed process can leave an unpublished `.preparing-*` directory. The next valid preparation removes abandoned staging directories under the index locks, even when it reuses an existing export. This cleanup skips symlinks and unrelated entries.
 
@@ -285,28 +321,24 @@ OBSIDIAN_MIN_CHUNK_CHARS=60 \
 npx -y @jabez007/obsidian-vault-mcp@2 obsidian_rag_index
 ```
 
-## Host-specific assets
+## Host files
 
-- **Canonical shared assets** live at the repo root. Edit `skills/` for skills and `agents/` for local agents; do not edit generated host copies by hand.
-- **Claude Code** uses `.claude-plugin/marketplace.json` and the generated wrapper under `plugins/claude-obsidian-vault-mcp/`. The wrapper contains Claude-specific `.claude-plugin/plugin.json`, `.mcp.json`, `hooks/hooks.json`, `skills/`, `scripts/session-init.sh`, `scripts/session-index.mjs`, `scripts/claude-mcp-server.sh`, package manifests, and `dist/index.js`.
-- **Codex package/checkouts** use `.codex-plugin/plugin.json`, `.mcp.json`, `skills/`, and `agents/` from the repo root.
-- **Codex repo marketplace installs** use `.agents/plugins/marketplace.json` and the plugin wrapper under `plugins/obsidian-vault-mcp/`. The wrapper's `.codex-plugin/`, `.mcp.json`, and `skills/` are generated from the root assets.
-- **OpenCode** uses `opencode.json` with its top-level `mcp` configuration and the built `dist/index.js` from this checkout.
-- **Legacy Gemini CLI** continues to use `gemini-extension.json`, `commands/`, `hooks/hooks.json`, and the scripts in `scripts/`.
-- **Shared behavior**: all hosts expose the same MCP server tools, and note-writing MCP tools re-index the changed note inside the server.
-- **Compatibility note**: the Codex wrapper intentionally does not bundle hooks yet. Gemini keeps `hooks/hooks.json`, while Codex relies on the in-server post-write reindex flow and avoids cross-host hook drift.
+Plugin hosts install from the repository root. Edit these files directly. Only `dist/index.js` is generated.
 
-After changing root skills, host plugin metadata, or `.mcp.json`, run:
+| File | Used by |
+|---|---|
+| `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` | Claude Code. The manifest runs `node ${CLAUDE_PLUGIN_ROOT}/dist/index.js`, which replaces the `npx` entry of the same name in `.mcp.json`. It also turns off the `commands/` and `agents/` folders, which use Gemini formats. |
+| `.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json`, `.mcp.json` | Codex. `.mcp.json` runs the npm package. |
+| `gemini-extension.json`, `commands/`, `agents/` | Gemini CLI. |
+| `hooks/hooks.json`, `scripts/session-init.sh`, `scripts/session-index.mjs` | The session-start hook for Claude Code, Codex, and Gemini CLI. Claude Code and Codex set `CLAUDE_PLUGIN_ROOT`. Gemini CLI doesn't, so the command first copies `${extensionPath}`, which Gemini CLI substitutes, into a shell variable. |
+| `skills/` | Claude Code, Codex, and Gemini CLI. |
+| `dist/index.js` | Built by `npm run build` and committed, because Claude Code installs the plugin from Git. CI fails when it doesn't match the source. |
 
-```sh
-npm run sync-assets
-```
-
-CI runs the same sync and fails if it changes generated host assets under `plugins/`, so host asset drift cannot merge silently.
+All hosts expose the same MCP tools, and note-writing tools reindex the changed note inside the server.
 
 ## Versioning
 
-`package.json` is the version source of truth. `gemini-extension.json`, `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, both `.codex-plugin/plugin.json` files, and the MCP server constructor derive from or are tested against the package version so release metadata stays aligned.
+`package.json` is the version source of truth. `npm version` runs `scripts/sync-version.mjs`, which copies the version into `gemini-extension.json`, `.claude-plugin/plugin.json`, and `.codex-plugin/plugin.json`, and the major version into the `npx` commands. Run `npm run sync-version` after editing the version by hand. CI fails when these files disagree with `package.json`.
 
 ## Available Tools
 

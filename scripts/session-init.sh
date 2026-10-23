@@ -1,43 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_SOURCE="${BASH_SOURCE[0]}"
-while [ -L "$SCRIPT_SOURCE" ]; do
-  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
-  SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
-  if [[ "$SCRIPT_SOURCE" != /* ]]; then
-    SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
-  fi
-done
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
-HOST_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${extensionPath:-}}}"
-
-if [ -n "$HOST_PLUGIN_ROOT" ]; then
-  PLUGIN_ROOT="$(cd "$HOST_PLUGIN_ROOT" && pwd)" || {
-    echo "Obsidian session-init hook could not use plugin root: $HOST_PLUGIN_ROOT" >&2
-    exit 1
-  }
-else
-  PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)" || {
-    echo "Obsidian session-init hook could not resolve its script directory." >&2
-    exit 1
-  }
-fi
-
-if [ ! -f "$PLUGIN_ROOT/scripts/session-init.sh" ]; then
-  echo "Obsidian session-init hook resolved plugin root to '$PLUGIN_ROOT', but scripts/session-init.sh was not found there." >&2
-  exit 1
-fi
-
+# Claude Code installs the plugin's dependencies next to the bundled server.
+# Other hosts, and Claude installs whose dependency step failed, use npm.
 declare -a SERVER_COMMAND
 if [ -n "${OBSIDIAN_MCP_SERVER_COMMAND:-}" ]; then
   read -r -a SERVER_COMMAND <<< "$OBSIDIAN_MCP_SERVER_COMMAND"
-elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "$CLAUDE_PLUGIN_ROOT/scripts/claude-mcp-server.sh" ]; then
-  SERVER_COMMAND=(bash "$CLAUDE_PLUGIN_ROOT/scripts/claude-mcp-server.sh")
+elif [ -d "$PLUGIN_ROOT/node_modules/@lancedb/lancedb" ]; then
+  SERVER_COMMAND=(node "$PLUGIN_ROOT/dist/index.js")
 else
   SERVER_COMMAND=(npx -y @jabez007/obsidian-vault-mcp@2)
 fi
+
 CONFIG_PRIMARY="$HOME/.obsidian-mcp.config.json"
 CONFIG_LEGACY="$HOME/.gemini-obsidian.config.json"
 VAULT_PATH="${OBSIDIAN_VAULT_PATH:-${CODEX_OBSIDIAN_VAULT_PATH:-${GEMINI_OBSIDIAN_VAULT_PATH:-}}}"
@@ -58,7 +34,7 @@ if [ -n "$VAULT_PATH" ] && [ -d "$VAULT_PATH" ]; then
   note_count=$(find "$VAULT_PATH" -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' ')
   status_line="Obsidian vault connected: $VAULT_PATH ($note_count notes)"
 
-  index_line=$(node "$SCRIPT_DIR/session-index.mjs" "${SERVER_COMMAND[@]}" obsidian_rag_index)
+  index_line=$(node "$PLUGIN_ROOT/scripts/session-index.mjs" "${SERVER_COMMAND[@]}" obsidian_rag_index)
 
   message="$status_line"$'\n'"$index_line"
 else

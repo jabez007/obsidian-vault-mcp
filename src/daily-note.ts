@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import moment from "moment";
+import { assertNoteMutationAllowed } from "./note-policy.js";
 import { getSafeFilePath } from "./utils.js";
 
 const DEFAULT_DAILY_NOTE_FORMAT = "YYYY-MM-DD";
@@ -54,6 +55,7 @@ export async function getOrCreateDailyNote(
     try {
         content = await fs.readFile(filePath, "utf-8");
     } catch {
+        assertNoteMutationAllowed(vaultPath, relativePath);
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         content = `# ${moment().format(dailyConfig.format)}\n\n`;
         await fs.writeFile(filePath, content, "utf-8");

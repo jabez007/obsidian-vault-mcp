@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-22
+
+- Add optional per-vault `.obsidian-mcpignore` rules in gitignore syntax, matched case-sensitively with `ignore` 7.0.12. One eligibility rule now applies to `obsidian_list_notes`, `obsidian_search_notes`, `obsidian_get_backlinks`, `obsidian_get_broken_links`, RAG indexing, writes, moves, and snapshot preparation. An invalid or unreadable rule file makes discovery and indexing return errors instead of unfiltered results. Explicit reads and edits of ignored notes still work, and note tools refuse to change the ignore file, including through differently cased names. On case-insensitive volumes, explicit writes and moves check and index a note under its stored spelling. Implements #25.
+- Record the rules fingerprint and reconciliation state in index metadata format version 2 and snapshot manifest policy version 2. `obsidian_rag_query` and snapshot preparation return errors until a whole-vault scan reconciles changed rules. Snapshot preparation checks every exported row against the rules and accepts `rules_text` to check staged rules. Implements the query and export portions of #26. Snapshot adoption checks remain part of #24.
+- Existing indexes require one normal whole-vault `obsidian_rag_index` scan after upgrading. The scan reuses unchanged embeddings, and the session-start hook runs it.
+- Record `pendingPaths` before index rows change and `failedPaths` for notes that cannot be read or embedded. Both produce a stale-index notice while queries stay available, and the next scan retries only those notes. Snapshot preparation refuses pending or failed updates. Journal full rebuilds too, so an interrupted rebuild after the database was removed no longer leaves an empty table reported as current.
+- Make queries take the cross-process index lock. They wait for writers and exporters up to `OBSIDIAN_INDEX_LOCK_WAIT_MS`, which defaults to 30 seconds.
+- Return `isError: true` over MCP and a nonzero CLI exit when `obsidian_rag_index` reports `success: false`.
+- Accept `--key=value` CLI options so empty values and values beginning with `--` reach the tool unchanged. Options that require a value now reject a missing one.
+- Resolve full-path wikilinks such as `[[folder/note]]` in `obsidian_get_broken_links`.
+- Report reindex failures after note writes and moves as a warning in the tool result. A failed reindex after a move no longer returns an error once the file has moved.
+- Install the Claude Code and Codex plugins from the repository root and remove the generated wrappers under `plugins/`. Claude Code now installs the plugin's npm dependencies itself and runs the committed `dist/index.js` directly, so the `claude-mcp-server.sh` launcher and its `flock`, `sha256sum`, and `OBSIDIAN_INSTALL_LOCK_WAIT_SECONDS` requirements are gone. Claude Code, Codex, and Gemini CLI share one `hooks/hooks.json`.
+- Fix the Gemini CLI session hook. Gemini CLI never substituted `${extensionPath}` inside the old nested shell default, so the hook couldn't find its script outside a checkout.
+- Publish only `dist/` to npm. Host manifests, skills, and hooks install from Git.
+- Remove `opencode.json`, which only worked from a checkout, and the unused `scripts/reindex-note.sh`. The README shows the OpenCode `mcp` entry for the npm package.
+- Replace `npm run sync-assets` with `npm run sync-version`, which `npm version` runs automatically.
+
 ## [2.1.0] - 2026-09-09
 
 - Recover abandoned snapshot staging directories under the index locks, distinguish reused Linux PIDs from the original lock owner, and require the supported LanceDB version for manifest parsing. Build the CLI before tests and correct missing stdin callbacks in dispatch tests.

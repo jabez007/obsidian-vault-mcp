@@ -4,9 +4,10 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import * as lancedb from '@lancedb/lancedb';
 import type { Schema } from 'apache-arrow';
+import { NotePolicy } from '../note-policy.js';
 import { assertLocalManifest } from './local-manifest.js';
 
-const POLICY_VERSION = 1;
+const POLICY_VERSION = 2;
 const COMPANION_FILES = ['file-hashes.json', 'schema-version.json', 'index-metadata.json'];
 const PAYLOAD_ENTRIES = ['lancedb', ...COMPANION_FILES];
 const MANIFEST_FILE = 'snapshot.json';
@@ -18,6 +19,7 @@ type Size = { bytes: number; files: number };
 export interface SnapshotResult {
   success: true;
   snapshotPath: string;
+  rulesFingerprint: string;
   sourceFingerprint: string;
   sourceVersion: number;
   reused: boolean;
@@ -34,6 +36,7 @@ export interface SnapshotResult {
 
 interface SnapshotManifest {
   policyVersion: number;
+  rulesFingerprint: string;
   files: Inventory;
   result: SnapshotResult;
 }
@@ -83,6 +86,9 @@ async function readMetadata(basePath: string, schemaVersion: number) {
   if (schema?.notesTableSchemaVersion !== schemaVersion) {
     throw new Error('Incompatible index schema. Run obsidian_rag_index with force_reindex=true before preparing a snapshot.');
   }
+  if ((metadata?.pendingPaths?.length ?? 0) > 0 || (metadata?.failedPaths?.length ?? 0) > 0) {
+    throw new Error('Index is stale: note updates are incomplete or failed. Run obsidian_rag_index before preparing a snapshot.');
+  }
   if (!hashes || typeof hashes !== 'object' || Array.isArray(hashes) ||
       Object.values(hashes).some(hash => typeof hash !== 'string' || !/^[a-f0-9]{32}$/.test(hash))) {
     throw new Error('Invalid file-hashes.json. Run obsidian_rag_index before preparing a snapshot.');
@@ -100,7 +106,7 @@ function schemaSignature(schema: Schema): string {
 
 // Read every current row, including vectors. Compaction may reorder rows, so
 // compare sorted row digests rather than physical record-batch order.
-async function inspectTable(table: lancedb.Table, expectedSchema: Schema, hashes: Record<string, string>) {
+async function inspectTable(table: lancedb.Table, expectedSchema: Schema, hashes: Record<string, string>, policy: NotePolicy) {
   if (schemaSignature(await table.schema()) !== schemaSignature(expectedSchema)) {
     throw new Error('Incompatible notes table columns. Run obsidian_rag_index with force_reindex=true.');
   }
@@ -117,6 +123,7 @@ async function inspectTable(table: lancedb.Table, expectedSchema: Schema, hashes
   let queryText = 'snapshotvalidationprobe';
   for await (const batch of table.query()) {
     for (const row of batch.toArray()) {
+      if (!policy.includes(String(row.path))) throw new Error(`Snapshot contains an excluded path: ${row.path}. Run obsidian_rag_index.`);
       if (!Object.hasOwn(hashes, row.path)) throw new Error(`Index row has no matching file hash: ${row.path}`);
       const vector = Array.from(row.vector as Iterable<number>);
       if (vector.length !== 384 || vector.some(value => !Number.isFinite(value))) {
@@ -160,6 +167,7 @@ export async function prepareSnapshot(
   basePath: string,
   expectedSchema: Schema,
   schemaVersion: number,
+  policy: NotePolicy,
   assertFresh: (hashes: Record<string, string>) => Promise<void>,
 ): Promise<SnapshotResult> {
   const snapshotRoot = path.join(basePath, 'snapshots');
@@ -199,7 +207,7 @@ export async function prepareSnapshot(
       }
     }
   }
-  const sourceFingerprint = digest(JSON.stringify({ policy: POLICY_VERSION, engine: ENGINE_VERSION, files: sourceFiles }));
+  const sourceFingerprint = digest(JSON.stringify({ policy: POLICY_VERSION, rulesFingerprint: policy.fingerprint, engine: ENGINE_VERSION, files: sourceFiles }));
   const snapshotPath = path.join(snapshotRoot, sourceFingerprint);
   if (await exists(snapshotPath)) {
     if ((await fs.lstat(snapshotPath)).isSymbolicLink()) {
@@ -207,10 +215,12 @@ export async function prepareSnapshot(
     }
     const files = await inventory(snapshotPath);
     const manifest = JSON.parse(await fs.readFile(path.join(snapshotPath, MANIFEST_FILE), 'utf8')) as SnapshotManifest;
-    if (manifest.policyVersion !== POLICY_VERSION || manifest.result?.sourceFingerprint !== sourceFingerprint ||
+    if (manifest.policyVersion !== POLICY_VERSION || manifest.rulesFingerprint !== policy.fingerprint ||
+        manifest.result?.rulesFingerprint !== policy.fingerprint || manifest.result?.sourceFingerprint !== sourceFingerprint ||
         !sameInventory(files.filter(file => file.path !== MANIFEST_FILE), manifest.files)) {
       throw new Error(`Existing snapshot is incomplete or modified: ${snapshotPath}. Move it aside before retrying; it will not be overwritten.`);
     }
+    await assertFresh(hashes);
     return { ...manifest.result, snapshotPath, reused: true };
   }
 
@@ -235,7 +245,7 @@ export async function prepareSnapshot(
     try {
       sourceVersion = await table.version();
       versionsBefore = (await table.listVersions()).map(version => version.version);
-      validation = await inspectTable(table, expectedSchema, hashes);
+      validation = await inspectTable(table, expectedSchema, hashes, policy);
       await table.optimize({ cleanupOlderThan: cutoff, deleteUnverified: false });
       versionsRetained = (await table.listVersions()).map(version => version.version);
     } finally { table.close(); db.close(); }
@@ -243,7 +253,7 @@ export async function prepareSnapshot(
     // Reopen the maintained copy without the indexer's cached connection.
     const reopened = await openNotes(temporaryPath);
     try {
-      const afterValidation = await inspectTable(reopened.table, expectedSchema, hashes);
+      const afterValidation = await inspectTable(reopened.table, expectedSchema, hashes, policy);
       if (JSON.stringify(afterValidation) !== JSON.stringify(validation)) {
         throw new Error('Snapshot validation failed: maintenance changed the current rows or embeddings.');
       }
@@ -254,17 +264,18 @@ export async function prepareSnapshot(
     }
     const files = await inventory(temporaryPath);
     const result: SnapshotResult = {
-      success: true, snapshotPath, sourceFingerprint, sourceVersion, reused: false,
+      success: true, snapshotPath, rulesFingerprint: policy.fingerprint, sourceFingerprint, sourceVersion, reused: false,
       before: totals(sourceFiles), after: totals(files), versionsBefore, versionsRetained,
       versionsRemoved: versionsBefore.filter(version => !versionsRetained.includes(version)),
       retention: { olderThan: cutoff.toISOString(), deleteUnverified: false },
       compaction: 'once-per-source-state', validation,
       compatibility: { notesTableSchemaVersion: schemaVersion, lanceDbVersion: ENGINE_VERSION },
     };
-    const manifest: SnapshotManifest = { policyVersion: POLICY_VERSION, files, result };
+    const manifest: SnapshotManifest = { policyVersion: POLICY_VERSION, rulesFingerprint: policy.fingerprint, files, result };
     await fs.writeFile(path.join(temporaryPath, MANIFEST_FILE), JSON.stringify(manifest, null, 2), { flag: 'wx' });
     // The final name only appears after every validation succeeds. A process
     // killed before this rename leaves an unpublished .preparing-* directory.
+    await assertFresh(hashes);
     await fs.rename(temporaryPath, snapshotPath);
     return result;
   } finally {

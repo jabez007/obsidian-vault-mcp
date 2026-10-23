@@ -20,20 +20,20 @@ jobs:
 
       - run: npm ci
 
-      - name: Verify generated host assets
-        run: |
-          npm run sync-assets
-          status="$(git status --short -- plugins)"
-          if [ -n "$status" ]; then
-            echo "$status"
-            echo "Generated host assets are out of date. Run npm run sync-assets and commit the result." >&2
-            exit 1
-          fi
-
       - run: npm run lint
 
       - run: npm run type-check
 
       - run: npm test
 
-      - run: npm run build
+      # Plugin hosts install from Git and run the committed bundle.
+      - name: Verify committed build and host versions
+        run: |
+          npm run build
+          npm run sync-version
+          status="$(git status --short)"
+          if [ -n "$status" ]; then
+            echo "$status"
+            echo "Committed files are out of date. Run npm run build and npm run sync-version, then commit the result." >&2
+            exit 1
+          fi
