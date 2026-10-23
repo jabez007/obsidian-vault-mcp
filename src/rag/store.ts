@@ -1153,7 +1153,7 @@ export class VaultIndexer {
         // export. Refresh metadata only to repair it or record changed file
         // stats, such as a timestamp-only touch that this scan reconciled.
         const metadata = previousMetadata;
-        if (!metadata || !Number.isFinite(metadata.indexedAt) ||
+        if (!metadata || metadata.metadataVersion !== INDEX_METADATA_VERSION || !Number.isFinite(metadata.indexedAt) ||
             metadata.fileCount !== indexStartSnapshot.fileCount ||
             metadata.latestMtimeMs !== indexStartSnapshot.latestMtimeMs ||
             metadata.rulesFingerprint !== policy.fingerprint || metadata.policyReconciled !== true ||
@@ -1161,7 +1161,7 @@ export class VaultIndexer {
             JSON.stringify(metadata.failedPaths ?? []) !== JSON.stringify(finalMetadata.failedPaths)) {
           await this.publishIndexMetadata(metadataPath, vaultPath, policy, finalMetadata);
         } else {
-          await this.publishIndexMetadata(metadataPath, vaultPath, policy, metadata);
+          await policy.assertUnchanged(vaultPath);
         }
         if (failedFiles > 0) {
           return { success: false, chunks: 0, message: `Failed to index ${failedFiles} file(s).`, maintenancePerformed: maintenance };

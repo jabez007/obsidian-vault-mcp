@@ -14,6 +14,7 @@ import {
     stripHeadingFromLink,
 } from "../utils.js";
 import type { ObsidianTool, ToolArguments, ToolContext } from "./types.js";
+import { validateToolArguments } from "./arguments.js";
 
 async function reindexNoteAfterWrite(
     context: ToolContext,
@@ -87,15 +88,17 @@ export const obsidianTools: ObsidianTool[] = [
             properties: {
                 path: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: "Absolute path to the Obsidian vault",
                 },
                 workspace_path: {
-                    type: "string",
+                    type: ["string", "null"],
                     description:
                         "Optional absolute path to the workspace root where .obsidian-vault-mcp should be created.",
                 },
                 vault_id: {
-                    type: "string",
+                    type: ["string", "null"],
                     description:
                         "Optional unique identifier for this vault to share metadata across machines.",
                 },
@@ -167,6 +170,8 @@ export const obsidianTools: ObsidianTool[] = [
             properties: {
                 file_path: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: "Relative path to the note",
                 },
                 vault_path: {
@@ -191,6 +196,8 @@ export const obsidianTools: ObsidianTool[] = [
             properties: {
                 file_path: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description:
                         'Relative path for the new note (e.g. "Ideas/MyIdea.md")',
                 },
@@ -258,6 +265,8 @@ export const obsidianTools: ObsidianTool[] = [
             properties: {
                 file_path: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: "Relative path to the note",
                 },
                 content: { type: "string", description: "Text to append" },
@@ -318,7 +327,7 @@ export const obsidianTools: ObsidianTool[] = [
         inputSchema: {
             type: "object",
             properties: {
-                query: { type: "string", description: "Text to search for" },
+                query: { type: "string", minLength: 1, pattern: "\\S", description: "Text to search for" },
                 vault_path: {
                     type: "string",
                     description: "Optional vault path override",
@@ -370,6 +379,8 @@ export const obsidianTools: ObsidianTool[] = [
                 },
                 file_path: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: "Relative path to a specific note to re-index",
                 },
                 force_reindex: {
@@ -447,6 +458,8 @@ export const obsidianTools: ObsidianTool[] = [
             properties: {
                 query: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: "Question or query to ask your notes",
                 },
                 limit: {
@@ -466,12 +479,12 @@ export const obsidianTools: ObsidianTool[] = [
                     description: "Optional unique identifier for the vault",
                 },
                 entities: {
-                    type: "array",
+                    type: ["array", "string"],
                     description: "Optional entity labels to require in matching chunks. Matched exactly (case-sensitive); comma-separated for CLI",
                     items: { type: "string" },
                 },
                 communities: {
-                    type: "array",
+                    type: ["array", "string"],
                     description: "Optional community labels to require in matching chunks. Matched exactly (case-sensitive); comma-separated for CLI",
                     items: { type: "string" },
                 },
@@ -516,6 +529,8 @@ export const obsidianTools: ObsidianTool[] = [
             properties: {
                 file_name: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description:
                         "Name of the note to find backlinks for (without extension)",
                 },
@@ -574,6 +589,8 @@ export const obsidianTools: ObsidianTool[] = [
             properties: {
                 file_path: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: "Relative path to the note",
                 },
                 vault_path: {
@@ -598,10 +615,14 @@ export const obsidianTools: ObsidianTool[] = [
             properties: {
                 source_path: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: "Current relative path of the note",
                 },
                 dest_path: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description:
                         'New relative path for the note (e.g. "Archive/OldNote.md")',
                 },
@@ -662,16 +683,20 @@ export const obsidianTools: ObsidianTool[] = [
     {
         name: "obsidian_update_frontmatter",
         description:
-            "Update YAML frontmatter of a note safely. Supports single key/value or batch updates.",
+            "Update YAML frontmatter of a note safely. Requires either an updates object or both key and value.",
         inputSchema: {
             type: "object",
             properties: {
                 file_path: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: "Relative path to the note",
                 },
                 key: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: "Frontmatter key to update (single-key mode)",
                 },
                 value: {
@@ -699,6 +724,7 @@ export const obsidianTools: ObsidianTool[] = [
             },
             required: ["file_path"],
         },
+        requiredArgumentGroups: [["updates"], ["key", "value"]],
         async handler(args, context) {
             const vaultPath = context.getVaultPath(args.vault_path);
             const workspacePath = context.getWorkspacePath(args.workspace_path);
@@ -743,10 +769,14 @@ export const obsidianTools: ObsidianTool[] = [
             properties: {
                 file_path: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: "Relative path to the note",
                 },
                 heading: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: 'Heading text to find (e.g. "Status")',
                 },
                 content: {
@@ -806,10 +836,14 @@ export const obsidianTools: ObsidianTool[] = [
             properties: {
                 file_path: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: "Relative path to the note",
                 },
                 heading: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: 'Heading text to find (e.g. "Notes")',
                 },
                 content: { type: "string", description: "Text to insert" },
@@ -868,10 +902,13 @@ export const obsidianTools: ObsidianTool[] = [
             properties: {
                 file_path: {
                     type: "string",
+                    minLength: 1,
+                    pattern: "\\S",
                     description: "Relative path to the note",
                 },
                 old_text: {
                     type: "string",
+                    minLength: 1,
                     description: "Exact text to find and replace",
                 },
                 new_text: {
@@ -994,7 +1031,7 @@ export async function callRegistryTool(
     if (!tool) {
         throw new Error(`Unknown tool: ${name}`);
     }
-    const input = args ?? {};
+    const input = validateToolArguments(tool, args);
     const mutations = new Set([
         "obsidian_create_note", "obsidian_append_note", "obsidian_update_frontmatter",
         "obsidian_replace_section", "obsidian_insert_at_heading", "obsidian_replace_in_note",

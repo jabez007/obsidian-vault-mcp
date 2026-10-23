@@ -87,7 +87,7 @@ describe('tool registry dispatch', () => {
       description: 'Force full re-index, ignoring cached file hashes (default: false)',
     });
     expect(response.tools.find((tool) => tool.name === 'obsidian_rag_query')?.inputSchema.properties?.entities).toEqual({
-      type: 'array',
+      type: ['array', 'string'],
       description: 'Optional entity labels to require in matching chunks. Matched exactly (case-sensitive); comma-separated for CLI',
       items: { type: 'string' },
     });
@@ -95,6 +95,16 @@ describe('tool registry dispatch', () => {
       type: 'boolean',
       description: 'Overwrite an existing note at the same path (default: false)',
     });
+  });
+
+  it('advertises object schemas without root composition or private validation fields', () => {
+    for (const tool of listToolsResponse().tools) {
+      expect(Object.keys(tool).sort()).toEqual(['description', 'inputSchema', 'name']);
+      expect(tool.inputSchema.type).toBe('object');
+      for (const keyword of ['anyOf', 'oneOf', 'allOf']) {
+        expect(Object.hasOwn(tool.inputSchema, keyword), `${tool.name}.${keyword}`).toBe(false);
+      }
+    }
   });
 
   it('dispatches explicit maintenance from CLI and MCP, including an unchanged index', async () => {
@@ -203,11 +213,13 @@ describe('tool registry dispatch', () => {
   it('rejects malformed RAG filters instead of silently searching unfiltered', async () => {
     const { context, indexer } = await createFakeContext();
 
-    await expect(dispatchMcpTool(
+    const result = await dispatchMcpTool(
       'obsidian_rag_query',
       { query: 'needle', entities: [42] },
       context,
-    )).rejects.toThrow("'entities' must be an array of strings");
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('entities must contain only string values');
     expect(indexer.search).not.toHaveBeenCalled();
   });
 

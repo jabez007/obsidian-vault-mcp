@@ -8,8 +8,10 @@ export type JsonSchema = {
 };
 
 export type JsonSchemaProperty = {
-    type: string;
+    type: string | string[];
     description?: string;
+    minLength?: number;
+    pattern?: string;
     enum?: string[];
     items?: {
         type: string;
@@ -87,5 +89,7 @@ export interface ObsidianTool {
     name: string;
     description: string;
     inputSchema: JsonSchema;
+    /** At least one group must be complete. Kept outside schemas for MCP host compatibility. */
+    requiredArgumentGroups?: string[][];
     handler(args: ToolArguments, context: ToolContext): Promise<string>;
 }

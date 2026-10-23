@@ -492,7 +492,7 @@ var require_moment = __commonJS({
         var format2 = this._relativeTime[diff2 > 0 ? "future" : "past"];
         return isFunction(format2) ? format2(output) : format2.replace(/%s/i, output);
       }
-      var aliases = {
+      var aliases2 = {
         D: "date",
         dates: "date",
         date: "date",
@@ -543,7 +543,7 @@ var require_moment = __commonJS({
         year: "year"
       };
       function normalizeUnits(units) {
-        return typeof units === "string" ? aliases[units] || aliases[units.toLowerCase()] : void 0;
+        return typeof units === "string" ? aliases2[units] || aliases2[units.toLowerCase()] : void 0;
       }
       function normalizeObjectUnits(inputObject) {
         var normalizedInput = {}, normalizedProp, prop;
@@ -35695,10 +35695,10 @@ var init_store = __esm({
             console.error("No index rows changed.");
             if (maintenance) await this.maintainTable(table);
             const metadata = previousMetadata;
-            if (!metadata || !Number.isFinite(metadata.indexedAt) || metadata.fileCount !== indexStartSnapshot.fileCount || metadata.latestMtimeMs !== indexStartSnapshot.latestMtimeMs || metadata.rulesFingerprint !== policy.fingerprint || metadata.policyReconciled !== true || JSON.stringify(metadata.pendingPaths ?? []) !== JSON.stringify(finalMetadata.pendingPaths) || JSON.stringify(metadata.failedPaths ?? []) !== JSON.stringify(finalMetadata.failedPaths)) {
+            if (!metadata || metadata.metadataVersion !== INDEX_METADATA_VERSION || !Number.isFinite(metadata.indexedAt) || metadata.fileCount !== indexStartSnapshot.fileCount || metadata.latestMtimeMs !== indexStartSnapshot.latestMtimeMs || metadata.rulesFingerprint !== policy.fingerprint || metadata.policyReconciled !== true || JSON.stringify(metadata.pendingPaths ?? []) !== JSON.stringify(finalMetadata.pendingPaths) || JSON.stringify(metadata.failedPaths ?? []) !== JSON.stringify(finalMetadata.failedPaths)) {
               await this.publishIndexMetadata(metadataPath, vaultPath, policy, finalMetadata);
             } else {
-              await this.publishIndexMetadata(metadataPath, vaultPath, policy, metadata);
+              await policy.assertUnchanged(vaultPath);
             }
             if (failedFiles > 0) {
               return { success: false, chunks: 0, message: `Failed to index ${failedFiles} file(s).`, maintenancePerformed: maintenance };
@@ -35980,6 +35980,83 @@ async function getOrCreateDailyNote(vaultPath) {
 // src/index.ts
 init_utils();
 
+// src/tools/arguments.ts
+var ToolArgumentError = class extends Error {
+  code = "INVALID_TOOL_ARGUMENTS";
+  constructor(tool, message) {
+    super(`${tool}: ${message}`);
+  }
+};
+function aliases(tool) {
+  if (tool.name === "obsidian_set_vault") return { vault_path: "path", id: "vault_id" };
+  if (tool.name === "obsidian_rag_index") return { force: "force_reindex" };
+  return {};
+}
+function cliArgumentSchemas(tool) {
+  const properties = { ...tool.inputSchema.properties };
+  for (const [alias, canonical] of Object.entries(aliases(tool))) properties[alias] = properties[canonical];
+  if (tool.name === "obsidian_rag_index") properties.hook = { type: "boolean", description: "Read note-write hook arguments from stdin" };
+  return properties;
+}
+function matchesType(value, type) {
+  switch (type) {
+    case "null":
+      return value === null;
+    case "array":
+      return Array.isArray(value);
+    case "object":
+      return value !== null && typeof value === "object" && !Array.isArray(value);
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
+    case "boolean":
+      return typeof value === "boolean";
+    case "string":
+      return typeof value === "string";
+    default:
+      return false;
+  }
+}
+function validateValue(tool, key, value, schema) {
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+  const fail = (message) => {
+    throw new ToolArgumentError(tool.name, `${key} ${message}`);
+  };
+  if (!types.some((type) => matchesType(value, type))) fail(`must be ${types.join(" or ")}.`);
+  if (typeof value === "string") {
+    if (schema.minLength !== void 0 && value.length < schema.minLength) fail("must not be empty.");
+    if (schema.pattern && !new RegExp(schema.pattern).test(value)) fail("must contain non-whitespace text.");
+  }
+  if (schema.enum && !schema.enum.includes(value)) fail(`must be one of: ${schema.enum.join(", ")}.`);
+  if (Array.isArray(value) && schema.items && value.some((item) => !matchesType(item, schema.items.type))) {
+    fail(`must contain only ${schema.items.type} values.`);
+  }
+}
+function validateToolArguments(tool, args) {
+  if (args !== void 0 && !matchesType(args, "object")) throw new ToolArgumentError(tool.name, "arguments must be an object.");
+  const input = Object.fromEntries(Object.entries(args ?? {}).filter(([, value]) => value !== void 0));
+  const aliasMap = aliases(tool);
+  for (const [alias, canonical] of Object.entries(aliasMap)) {
+    if (Object.hasOwn(input, alias) && !Object.hasOwn(input, canonical)) input[canonical] = input[alias];
+  }
+  for (const key of tool.inputSchema.required ?? []) {
+    if (!Object.hasOwn(input, key)) throw new ToolArgumentError(tool.name, `${key} is required`);
+  }
+  const properties = tool.inputSchema.properties ?? {};
+  for (const [key, value] of Object.entries(input)) {
+    const canonical = Object.hasOwn(aliasMap, key) ? aliasMap[key] : key;
+    if (Object.hasOwn(properties, canonical)) validateValue(tool, key, value, properties[canonical]);
+  }
+  const alternatives = tool.requiredArgumentGroups;
+  if (alternatives && !alternatives.some((group) => group.every((key) => Object.hasOwn(input, key)))) {
+    throw new ToolArgumentError(tool.name, `${alternatives.map((group) => group.join(" and ")).join(" or ")} are required`);
+  }
+  if (tool.name === "obsidian_rag_index" && Object.hasOwn(input, "force")) {
+    input.force_reindex = input.force_reindex === true || input.force === true;
+  }
+  for (const alias of Object.keys(aliasMap)) delete input[alias];
+  return input;
+}
+
 // src/tools/dispatch.ts
 init_note_policy();
 
@@ -36036,14 +36113,16 @@ var obsidianTools = [
       properties: {
         path: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Absolute path to the Obsidian vault"
         },
         workspace_path: {
-          type: "string",
+          type: ["string", "null"],
           description: "Optional absolute path to the workspace root where .obsidian-vault-mcp should be created."
         },
         vault_id: {
-          type: "string",
+          type: ["string", "null"],
           description: "Optional unique identifier for this vault to share metadata across machines."
         }
       },
@@ -36101,6 +36180,8 @@ var obsidianTools = [
       properties: {
         file_path: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Relative path to the note"
         },
         vault_path: {
@@ -36124,6 +36205,8 @@ var obsidianTools = [
       properties: {
         file_path: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: 'Relative path for the new note (e.g. "Ideas/MyIdea.md")'
         },
         content: {
@@ -36189,6 +36272,8 @@ var obsidianTools = [
       properties: {
         file_path: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Relative path to the note"
         },
         content: { type: "string", description: "Text to append" },
@@ -36248,7 +36333,7 @@ var obsidianTools = [
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Text to search for" },
+        query: { type: "string", minLength: 1, pattern: "\\S", description: "Text to search for" },
         vault_path: {
           type: "string",
           description: "Optional vault path override"
@@ -36298,6 +36383,8 @@ var obsidianTools = [
         },
         file_path: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Relative path to a specific note to re-index"
         },
         force_reindex: {
@@ -36371,6 +36458,8 @@ var obsidianTools = [
       properties: {
         query: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Question or query to ask your notes"
         },
         limit: {
@@ -36390,12 +36479,12 @@ var obsidianTools = [
           description: "Optional unique identifier for the vault"
         },
         entities: {
-          type: "array",
+          type: ["array", "string"],
           description: "Optional entity labels to require in matching chunks. Matched exactly (case-sensitive); comma-separated for CLI",
           items: { type: "string" }
         },
         communities: {
-          type: "array",
+          type: ["array", "string"],
           description: "Optional community labels to require in matching chunks. Matched exactly (case-sensitive); comma-separated for CLI",
           items: { type: "string" }
         }
@@ -36439,6 +36528,8 @@ Content: ${result.text}
       properties: {
         file_name: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Name of the note to find backlinks for (without extension)"
         },
         vault_path: {
@@ -36491,6 +36582,8 @@ Content: ${result.text}
       properties: {
         file_path: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Relative path to the note"
         },
         vault_path: {
@@ -36515,10 +36608,14 @@ Content: ${result.text}
       properties: {
         source_path: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Current relative path of the note"
         },
         dest_path: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: 'New relative path for the note (e.g. "Archive/OldNote.md")'
         },
         vault_path: {
@@ -36574,16 +36671,20 @@ Content: ${result.text}
   },
   {
     name: "obsidian_update_frontmatter",
-    description: "Update YAML frontmatter of a note safely. Supports single key/value or batch updates.",
+    description: "Update YAML frontmatter of a note safely. Requires either an updates object or both key and value.",
     inputSchema: {
       type: "object",
       properties: {
         file_path: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Relative path to the note"
         },
         key: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Frontmatter key to update (single-key mode)"
         },
         value: {
@@ -36609,6 +36710,7 @@ Content: ${result.text}
       },
       required: ["file_path"]
     },
+    requiredArgumentGroups: [["updates"], ["key", "value"]],
     async handler(args, context) {
       const vaultPath = context.getVaultPath(args.vault_path);
       const workspacePath = context.getWorkspacePath(args.workspace_path);
@@ -36649,10 +36751,14 @@ Content: ${result.text}
       properties: {
         file_path: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Relative path to the note"
         },
         heading: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: 'Heading text to find (e.g. "Status")'
         },
         content: {
@@ -36710,10 +36816,14 @@ Content: ${result.text}
       properties: {
         file_path: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Relative path to the note"
         },
         heading: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: 'Heading text to find (e.g. "Notes")'
         },
         content: { type: "string", description: "Text to insert" },
@@ -36771,10 +36881,13 @@ Content: ${result.text}
       properties: {
         file_path: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Relative path to the note"
         },
         old_text: {
           type: "string",
+          minLength: 1,
           description: "Exact text to find and replace"
         },
         new_text: {
@@ -36884,7 +36997,7 @@ async function callRegistryTool(name, args, context) {
   if (!tool) {
     throw new Error(`Unknown tool: ${name}`);
   }
-  const input = args ?? {};
+  const input = validateToolArguments(tool, args);
   const mutations = /* @__PURE__ */ new Set([
     "obsidian_create_note",
     "obsidian_append_note",
@@ -36910,7 +37023,6 @@ async function callRegistryTool(name, args, context) {
 }
 
 // src/tools/dispatch.ts
-var EXTRA_BOOLEAN_CLI_KEYS = /* @__PURE__ */ new Set(["force", "hook"]);
 function listToolsResponse() {
   return {
     tools: obsidianTools.map(({ name, description, inputSchema }) => ({
@@ -36925,7 +37037,7 @@ async function dispatchMcpTool(name, args, context) {
   try {
     text = await callRegistryTool(name, args, context);
   } catch (error2) {
-    if (!(error2 instanceof NotePolicyError)) throw error2;
+    if (!(error2 instanceof NotePolicyError) && !(error2 instanceof ToolArgumentError)) throw error2;
     return { content: [{ type: "text", text: JSON.stringify({ success: false, error: { code: error2.code, message: error2.message } }) }], isError: true };
   }
   if (["obsidian_prepare_index_snapshot", "obsidian_rag_index"].includes(name) && JSON.parse(text).success === false) {
@@ -36933,39 +37045,50 @@ async function dispatchMcpTool(name, args, context) {
   }
   return { content: [{ type: "text", text }] };
 }
-function getPropertyType(tool, key) {
-  return tool.inputSchema.properties?.[key]?.type;
-}
 function parseBoolean(value) {
   if (value === true || value === false) return value;
   if (typeof value === "string") {
-    const normalized = value.toLowerCase();
-    if (normalized === "true") return true;
-    if (normalized === "false") return false;
+    if (value.toLowerCase() === "true") return true;
+    if (value.toLowerCase() === "false") return false;
   }
-  return Boolean(value);
+  throw new Error("must be true or false");
 }
 function parseCliValue(tool, key, value) {
-  const propertyType = getPropertyType(tool, key);
-  if (propertyType === "boolean" || EXTRA_BOOLEAN_CLI_KEYS.has(key)) {
-    return parseBoolean(value);
+  const schema = cliArgumentSchemas(tool)[key];
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+  try {
+    if (types.includes("boolean")) return parseBoolean(value);
+    if (types.includes("number")) {
+      if (typeof value !== "string" || value.trim() === "" || !Number.isFinite(Number(value))) throw new Error("must be a finite number");
+      return Number(value);
+    }
+    if (types.includes("array")) return String(value).split(",").map((item) => item.trim()).filter(Boolean);
+    if (types.includes("object")) return JSON.parse(String(value));
+    return value;
+  } catch (error2) {
+    throw new ToolArgumentError(tool.name, `${key}: ${error2 instanceof Error ? error2.message : String(error2)}`);
   }
-  if (propertyType === "number") {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : value;
-  }
-  if (propertyType === "array") {
-    return String(value).split(",").map((item) => item.trim()).filter((item) => item.length > 0);
-  }
-  return value;
+}
+function toolHelp(tool) {
+  const required2 = new Set(tool.inputSchema.required ?? []);
+  return [
+    `Usage: obsidian-vault-mcp ${tool.name} [options]`,
+    tool.description,
+    "",
+    "Options:",
+    ...Object.entries(cliArgumentSchemas(tool)).map(([key, schema]) => `  --${key} (${[schema.type].flat().join(" or ")}${required2.has(key) ? ", required" : ""}) ${schema.description ?? ""}`),
+    "  --help  Show this help without running the tool."
+  ].join("\n");
 }
 function parseCliToolArgs(tool, rawArgs) {
   const parsedArgs = {};
+  const schemas = cliArgumentSchemas(tool);
   for (let i = 0; i < rawArgs.length; i++) {
     const current = rawArgs[i];
-    if (!current?.startsWith("--")) continue;
+    if (!current?.startsWith("--")) throw new ToolArgumentError(tool.name, `Unexpected argument: ${current}`);
     const equalsIndex = current.indexOf("=");
     const key = current.substring(2, equalsIndex === -1 ? void 0 : equalsIndex);
+    if (!Object.hasOwn(schemas, key)) throw new ToolArgumentError(tool.name, `Unknown option --${key}`);
     if (equalsIndex !== -1) {
       parsedArgs[key] = parseCliValue(tool, key, current.substring(equalsIndex + 1));
       continue;
@@ -36974,9 +37097,9 @@ function parseCliToolArgs(tool, rawArgs) {
       parsedArgs[key] = parseCliValue(tool, key, rawArgs[i + 1]);
       i++;
     } else {
-      const propertyType = getPropertyType(tool, key);
-      if (propertyType && propertyType !== "boolean" && !EXTRA_BOOLEAN_CLI_KEYS.has(key)) {
-        throw new Error(`--${key} requires a value. Use --${key}=VALUE for values beginning with --.`);
+      const types = [schemas[key].type].flat();
+      if (!types.includes("boolean")) {
+        throw new ToolArgumentError(tool.name, `--${key} requires a value. Use --${key}=VALUE for values beginning with --.`);
       }
       parsedArgs[key] = parseCliValue(tool, key, true);
     }
@@ -36993,7 +37116,7 @@ async function buildHookRagIndexArgs(input) {
     workspace_path: toolInput.workspace_path,
     vault_id: toolInput.vault_id,
     file_path: toolInput.file_path,
-    force_reindex: parseBoolean(toolInput.force_reindex)
+    force_reindex: parseCliValue(getTool("obsidian_rag_index"), "force_reindex", toolInput.force_reindex ?? false)
   };
 }
 async function dispatchCliTool(argv, context, readStdin2) {
@@ -37010,6 +37133,9 @@ async function dispatchCliTool(argv, context, readStdin2) {
     };
   }
   try {
+    if (argv.length === 2 && ["--help", "-h"].includes(argv[1])) {
+      return { handled: true, exitCode: 0, output: toolHelp(tool) };
+    }
     const parsedArgs = parseCliToolArgs(tool, argv.slice(1));
     const args = toolName === "obsidian_rag_index" && parsedArgs.hook ? await buildHookRagIndexArgs(await readStdin2()) : parsedArgs;
     if (!args) {
