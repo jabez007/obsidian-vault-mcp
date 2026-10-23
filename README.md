@@ -342,7 +342,7 @@ All hosts expose the same MCP tools, and note-writing tools reindex the changed 
 
 ## Available Tools
 
-Tool arguments are validated before vault access, configuration changes, or handler execution. Missing required arguments return an error naming the tool and argument. Note paths, the required vault path, headings, queries, and replacement search text must contain non-whitespace text. Required note content can be empty, and empty replacement text deletes the matched text. Frontmatter updates require either an `updates` object or both `key` and `value`.
+Tool arguments are validated before vault access, configuration changes, or handler execution. Missing required arguments return an error naming the tool and argument. Note paths, the required vault path, headings, and queries must contain non-whitespace text. Replacement search text must not be empty, but it can be whitespace only, such as a run of blank lines. Required note content can be empty, and empty replacement text deletes the matched text. Frontmatter updates require either an `updates` object or both `key` and `value`.
 
 MCP arguments retain their declared types. Validation errors return `isError: true` with code `INVALID_TOOL_ARGUMENTS`. The CLI parses booleans, finite numbers, comma-separated filters, and JSON objects before the same validation, and exits nonzero on invalid input. Unknown CLI options are rejected. Existing `obsidian_set_vault` aliases `vault_path` and `id`, plus the indexing `--force` and `--hook` options, remain supported.
 

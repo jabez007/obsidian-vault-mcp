@@ -4,8 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Validate required arguments, types, nonempty identifiers, array items, enum values, and frontmatter update modes before handlers or vault access. Preserve empty note content and replacement text. Add read-only CLI tool help, reject unknown options, and normalize typed CLI values before shared validation. Fixes #29.
+- Validate required arguments, types, nonempty identifiers, array items, enum values, and frontmatter update modes before handlers or vault access. Preserve empty note content and replacement text, and accept whitespace-only replacement search text. Add read-only CLI tool help. Reject unknown CLI options and positional arguments, which 2.2.0 ignored. Normalize typed CLI values before shared validation. Fixes #29.
 - Preserve the bytes and mtime of healthy index metadata during unchanged scans, including pretty-printed metadata installed from shared snapshots. Continue checking rule changes and repairing metadata versions and freshness when needed. Fixes #28.
+
 ## [2.2.0] - 2026-10-22
 
 - Add optional per-vault `.obsidian-mcpignore` rules in gitignore syntax, matched case-sensitively with `ignore` 7.0.12. One eligibility rule now applies to `obsidian_list_notes`, `obsidian_search_notes`, `obsidian_get_backlinks`, `obsidian_get_broken_links`, RAG indexing, writes, moves, and snapshot preparation. An invalid or unreadable rule file makes discovery and indexing return errors instead of unfiltered results. Explicit reads and edits of ignored notes still work, and note tools refuse to change the ignore file, including through differently cased names. On case-insensitive volumes, explicit writes and moves check and index a note under its stored spelling. Implements #25.

@@ -111,6 +111,7 @@ describe('tool argument validation', () => {
     { name: 'obsidian_create_note', args: { file_path: 'existing.md', content: 0, overwrite: true }, field: 'content' },
     { name: 'obsidian_create_note', args: { file_path: 'existing.md', content: '', overwrite: 'false' }, field: 'overwrite' },
     { name: 'obsidian_rag_query', args: { query: '' }, field: 'query' },
+    { name: 'obsidian_replace_in_note', args: { file_path: 'existing.md', old_text: '' }, field: 'old_text' },
     { name: 'obsidian_rag_query', args: { query: 'test', limit: '5' }, field: 'limit' },
     { name: 'obsidian_rag_query', args: { query: 'test', limit: NaN }, field: 'limit' },
     { name: 'obsidian_rag_query', args: { query: 'test', entities: [false] }, field: 'entities' },
@@ -150,6 +151,13 @@ describe('tool argument validation', () => {
     const replaced = await dispatchMcpTool('obsidian_replace_in_note', { file_path: 'existing.md', old_text: 'Original', new_text: '' }, context);
     expect(replaced.isError).not.toBe(true);
     expect(await fs.readFile(path.join(vault, 'existing.md'), 'utf8')).toBe('# Heading\n\n content.\n');
+  });
+
+  it('accepts whitespace-only replacement search text', async () => {
+    await fs.writeFile(path.join(vault, 'spaced.md'), 'one\n\n\n\ntwo\n');
+    const result = await dispatchMcpTool('obsidian_replace_in_note', { file_path: 'spaced.md', old_text: '\n\n\n\n', new_text: '\n\n' }, context);
+    expect(result.isError).not.toBe(true);
+    expect(await fs.readFile(path.join(vault, 'spaced.md'), 'utf8')).toBe('one\n\ntwo\n');
   });
 
   it('normalizes CLI JSON objects before shared validation', async () => {

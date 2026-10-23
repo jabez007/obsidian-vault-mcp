@@ -909,7 +909,6 @@ export const obsidianTools: ObsidianTool[] = [
                 old_text: {
                     type: "string",
                     minLength: 1,
-                    pattern: "\\S",
                     description: "Exact text to find and replace",
                 },
                 new_text: {

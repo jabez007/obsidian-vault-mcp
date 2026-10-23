@@ -36888,7 +36888,6 @@ Content: ${result.text}
         old_text: {
           type: "string",
           minLength: 1,
-          pattern: "\\S",
           description: "Exact text to find and replace"
         },
         new_text: {
