@@ -1,3 +1,30 @@
+# Release v2.3.0
+
+## Summary
+
+Version 2.3.0 checks every tool call against the tool's input schema before the call reaches the vault. Unchanged index scans no longer rewrite the index metadata file.
+
+## Highlights
+
+- A tool call with a missing required argument or a value of the wrong type returns an error that names the tool and the argument. The check runs over MCP and the CLI, before any vault, configuration, or index access. In 2.2.0, a note tool called without `file_path` read or wrote a file named `undefined` at the vault root. Over MCP, these errors set `isError: true` with code `INVALID_TOOL_ARGUMENTS`.
+- Note paths, the vault path, headings, and queries must contain non-whitespace text. Note content and `new_text` can be empty. `old_text` can't be empty, but it can be whitespace only, so `obsidian_replace_in_note` can collapse a run of blank lines.
+- `obsidian_update_frontmatter` requires either `updates` or both `key` and `value`. The CLI accepts `updates` as a JSON object.
+- Print a tool's options without running it with `--help` or `-h`.
+- An unchanged vault scan leaves `index-metadata.json` alone, including pretty-printed metadata installed from a shared snapshot. The scan still repairs the file when it is missing, has an old `metadataVersion`, or has stale file stats.
+- The published tool schemas now list values the handlers already accepted. These are comma-separated strings for `entities` and `communities`, and `null` for `workspace_path` and `vault_id` in `obsidian_set_vault`.
+
+## Upgrade
+
+This release keeps the version 2 tool API and the version 3 index schema. Existing indexes need no rebuild or rescan.
+
+These changes can affect scripts:
+
+- The CLI rejects unknown options and positional arguments, which 2.2.0 ignored. Check scripts for options that a tool doesn't define. For example, `obsidian_rag_index` takes `--vault_path`, not `--path`. The `obsidian_set_vault` aliases `vault_path` and `id`, and the indexing `--force` and `--hook` options, still work.
+- Calls that leave out a required argument fail over the CLI and MCP instead of running. The CLI exits nonzero.
+- MCP calls still ignore unknown arguments.
+
+---
+
 # Release v2.2.0
 
 ## Summary
