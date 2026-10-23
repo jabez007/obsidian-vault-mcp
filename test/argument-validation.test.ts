@@ -158,6 +158,15 @@ describe('tool argument validation', () => {
     expect(await fs.readFile(path.join(vault, 'existing.md'), 'utf8')).toContain('priority: 3');
   });
 
+  it.each([
+    { updates: { status: 'reviewed' } },
+    { key: 'status', value: 'reviewed' },
+  ])('accepts a complete frontmatter update mode over MCP: %j', async mode => {
+    const result = await dispatchMcpTool('obsidian_update_frontmatter', { file_path: 'existing.md', ...mode }, context);
+    expect(result.isError).not.toBe(true);
+    expect(await fs.readFile(path.join(vault, 'existing.md'), 'utf8')).toContain('status: reviewed');
+  });
+
   it.each([null, [], false, 'text', 42])('rejects a non-object MCP argument container: %j', async args => {
     const result = await dispatchMcpTool('obsidian_get_config', args as any, context);
     expect(result.isError).toBe(true);
@@ -203,6 +212,12 @@ describe('tool argument validation', () => {
     const client = new Client({ name: 'argument-validation-regression', version: '1.0.0' });
     try {
       await client.connect(transport);
+      const listing = await client.listTools();
+      for (const tool of listing.tools) {
+        expect(tool.inputSchema.type).toBe('object');
+        for (const keyword of ['anyOf', 'oneOf', 'allOf']) expect(Object.hasOwn(tool.inputSchema, keyword)).toBe(false);
+        expect(Object.hasOwn(tool, 'requiredArgumentGroups')).toBe(false);
+      }
       for (const { tool, key } of requiredCases.filter(test => test.channel === 'MCP')) {
         const args = validArguments(tool); delete args[key];
         // Use the raw request path so client-side tool validation cannot hide

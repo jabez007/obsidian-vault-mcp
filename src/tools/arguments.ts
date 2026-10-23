@@ -8,12 +8,14 @@ export class ToolArgumentError extends Error {
     }
 }
 
+/** Compatibility aliases are tool-local so unrelated commands cannot accept them silently. */
 function aliases(tool: ObsidianTool): Record<string, string> {
     if (tool.name === 'obsidian_set_vault') return { vault_path: 'path', id: 'vault_id' };
     if (tool.name === 'obsidian_rag_index') return { force: 'force_reindex' };
     return {};
 }
 
+/** Include CLI aliases and hook options without changing the advertised MCP schemas. */
 export function cliArgumentSchemas(tool: ObsidianTool): Record<string, JsonSchemaProperty> {
     const properties = { ...tool.inputSchema.properties };
     for (const [alias, canonical] of Object.entries(aliases(tool))) properties[alias] = properties[canonical];
@@ -33,6 +35,7 @@ function matchesType(value: unknown, type: string): boolean {
     }
 }
 
+/** Check supported schema constraints without coercing values supplied by MCP clients. */
 function validateValue(tool: ObsidianTool, key: string, value: unknown, schema: JsonSchemaProperty) {
     const types = Array.isArray(schema.type) ? schema.type : [schema.type];
     const fail = (message: string): never => { throw new ToolArgumentError(tool.name, `${key} ${message}`); };
@@ -63,9 +66,9 @@ export function validateToolArguments(tool: ObsidianTool, args: unknown): ToolAr
         const canonical = Object.hasOwn(aliasMap, key) ? aliasMap[key] : key;
         if (Object.hasOwn(properties, canonical)) validateValue(tool, key, value, properties[canonical]);
     }
-    const alternatives = tool.inputSchema.anyOf;
-    if (alternatives && !alternatives.some(option => option.required.every(key => Object.hasOwn(input, key)))) {
-        throw new ToolArgumentError(tool.name, `${alternatives.map(option => option.required.join(' and ')).join(' or ')} are required`);
+    const alternatives = tool.requiredArgumentGroups;
+    if (alternatives && !alternatives.some(group => group.every(key => Object.hasOwn(input, key)))) {
+        throw new ToolArgumentError(tool.name, `${alternatives.map(group => group.join(' and ')).join(' or ')} are required`);
     }
     // Preserve the existing --force alias's OR behavior when both are present.
     if (tool.name === 'obsidian_rag_index' && Object.hasOwn(input, 'force')) {

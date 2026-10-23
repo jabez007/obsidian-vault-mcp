@@ -683,7 +683,7 @@ export const obsidianTools: ObsidianTool[] = [
     {
         name: "obsidian_update_frontmatter",
         description:
-            "Update YAML frontmatter of a note safely. Supports single key/value or batch updates.",
+            "Update YAML frontmatter of a note safely. Requires either an updates object or both key and value.",
         inputSchema: {
             type: "object",
             properties: {
@@ -723,8 +723,8 @@ export const obsidianTools: ObsidianTool[] = [
                 },
             },
             required: ["file_path"],
-            anyOf: [{ required: ["updates"] }, { required: ["key", "value"] }],
         },
+        requiredArgumentGroups: [["updates"], ["key", "value"]],
         async handler(args, context) {
             const vaultPath = context.getVaultPath(args.vault_path);
             const workspacePath = context.getWorkspacePath(args.workspace_path);

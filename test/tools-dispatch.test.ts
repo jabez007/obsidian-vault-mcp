@@ -97,6 +97,16 @@ describe('tool registry dispatch', () => {
     });
   });
 
+  it('advertises object schemas without root composition or private validation fields', () => {
+    for (const tool of listToolsResponse().tools) {
+      expect(Object.keys(tool).sort()).toEqual(['description', 'inputSchema', 'name']);
+      expect(tool.inputSchema.type).toBe('object');
+      for (const keyword of ['anyOf', 'oneOf', 'allOf']) {
+        expect(Object.hasOwn(tool.inputSchema, keyword), `${tool.name}.${keyword}`).toBe(false);
+      }
+    }
+  });
+
   it('dispatches explicit maintenance from CLI and MCP, including an unchanged index', async () => {
     const { context, indexer, vaultPath } = await createFakeContext();
     vi.mocked(indexer.indexVault).mockResolvedValue({ success: true, chunks: 0, maintenancePerformed: true });

@@ -14,6 +14,7 @@ export interface CliDispatchResult {
     output?: string;
 }
 
+/** Publish MCP definitions only; runtime validation metadata stays inside the registry. */
 export function listToolsResponse() {
     return {
         tools: obsidianTools.map(({ name, description, inputSchema }) => ({
@@ -24,6 +25,7 @@ export function listToolsResponse() {
     };
 }
 
+/** Return validation and policy failures as tool errors; other failures reach the server's error handler. */
 export async function dispatchMcpTool(
     name: string,
     args: ToolArguments | undefined,
@@ -76,6 +78,7 @@ function toolHelp(tool: ObsidianTool): string {
     ].join("\n");
 }
 
+/** Parse typed options for a known tool and reject unknown or incomplete options before dispatch. */
 export function parseCliToolArgs(tool: ObsidianTool, rawArgs: string[]) {
     const parsedArgs: ToolArguments = {};
     const schemas = cliArgumentSchemas(tool);
@@ -120,6 +123,7 @@ async function buildHookRagIndexArgs(
     };
 }
 
+/** Handle known tools and read-only help, leaving unrecognized tool names to the caller. */
 export async function dispatchCliTool(
     argv: string[],
     context: ToolContext,

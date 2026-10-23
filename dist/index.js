@@ -36046,9 +36046,9 @@ function validateToolArguments(tool, args) {
     const canonical = Object.hasOwn(aliasMap, key) ? aliasMap[key] : key;
     if (Object.hasOwn(properties, canonical)) validateValue(tool, key, value, properties[canonical]);
   }
-  const alternatives = tool.inputSchema.anyOf;
-  if (alternatives && !alternatives.some((option) => option.required.every((key) => Object.hasOwn(input, key)))) {
-    throw new ToolArgumentError(tool.name, `${alternatives.map((option) => option.required.join(" and ")).join(" or ")} are required`);
+  const alternatives = tool.requiredArgumentGroups;
+  if (alternatives && !alternatives.some((group) => group.every((key) => Object.hasOwn(input, key)))) {
+    throw new ToolArgumentError(tool.name, `${alternatives.map((group) => group.join(" and ")).join(" or ")} are required`);
   }
   if (tool.name === "obsidian_rag_index" && Object.hasOwn(input, "force")) {
     input.force_reindex = input.force_reindex === true || input.force === true;
@@ -36671,7 +36671,7 @@ Content: ${result.text}
   },
   {
     name: "obsidian_update_frontmatter",
-    description: "Update YAML frontmatter of a note safely. Supports single key/value or batch updates.",
+    description: "Update YAML frontmatter of a note safely. Requires either an updates object or both key and value.",
     inputSchema: {
       type: "object",
       properties: {
@@ -36708,9 +36708,9 @@ Content: ${result.text}
           description: "Optional unique identifier for the vault"
         }
       },
-      required: ["file_path"],
-      anyOf: [{ required: ["updates"] }, { required: ["key", "value"] }]
+      required: ["file_path"]
     },
+    requiredArgumentGroups: [["updates"], ["key", "value"]],
     async handler(args, context) {
       const vaultPath = context.getVaultPath(args.vault_path);
       const workspacePath = context.getWorkspacePath(args.workspace_path);

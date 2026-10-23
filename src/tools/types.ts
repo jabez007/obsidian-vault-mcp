@@ -5,7 +5,6 @@ export type JsonSchema = {
     type: string;
     properties?: Record<string, JsonSchemaProperty>;
     required?: string[];
-    anyOf?: Array<{ required: string[] }>;
 };
 
 export type JsonSchemaProperty = {
@@ -90,5 +89,7 @@ export interface ObsidianTool {
     name: string;
     description: string;
     inputSchema: JsonSchema;
+    /** At least one group must be complete. Kept outside schemas for MCP host compatibility. */
+    requiredArgumentGroups?: string[][];
     handler(args: ToolArguments, context: ToolContext): Promise<string>;
 }
