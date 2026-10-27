@@ -112,23 +112,30 @@ describe('index snapshots', () => {
     } finally { table.close(); db.close(); }
   });
 
-  it('removes recent orphan data, index, and transaction files only from the private copy', async () => {
+  it.each(['before', 'after'])('removes orphan files dated %s the latest manifest only from the private copy', async timing => {
     await seed();
     const tablePath = path.join(store, 'lancedb', 'notes.lance');
+    const sourceDb = await lancedb.connect(path.join(store, 'lancedb'));
+    const sourceTable = await sourceDb.openTable('notes');
+    let latestManifestTime: number;
+    try {
+      latestManifestTime = Math.max(...(await sourceTable.listVersions()).map(version => version.timestamp.getTime()));
+    } finally { sourceTable.close(); sourceDb.close(); }
     const orphanFiles = [
       `data/${randomUUID()}.lance`,
       `_indices/${randomUUID()}/index.idx`,
+      `_deletions/${randomUUID()}.arrow`,
       `_transactions/${randomUUID()}.txn`,
     ];
-    // Model abandoned writes from an hour ago, well inside the seven-day
-    // protection window and older than every retained manifest.
-    const recent = new Date(Date.now() - 3600000);
+    // The newer case models an abandoned write after the last commit. Set
+    // explicit times so filesystem timestamp precision cannot hide the bug.
+    const orphanTime = new Date(latestManifestTime + (timing === 'after' ? 1000 : -3600000));
     const originalMtimes = new Map<string, number>();
     for (const relative of orphanFiles) {
       const file = path.join(tablePath, relative);
       await fs.mkdir(path.dirname(file), { recursive: true });
       await fs.writeFile(file, 'abandoned transaction payload');
-      await fs.utimes(file, recent, recent);
+      await fs.utimes(file, orphanTime, orphanTime);
       originalMtimes.set(relative, (await fs.stat(file)).mtimeMs);
     }
     const liveBefore = await inventory(store);
@@ -141,27 +148,37 @@ describe('index snapshots', () => {
     expect(await inventory(store)).toEqual(liveBefore);
     expect(result.retention.deleteUnverified).toBe(true);
     expect(result.validation).toMatchObject({ rows: 1, vectorQuery: true, fullTextQuery: true });
+    const db = await lancedb.connect(path.join(result.snapshotPath, 'lancedb'));
+    const table = await db.openTable('notes');
+    try {
+      for (const version of result.versionsRetained) {
+        await table.checkout(version);
+        expect((await table.query().toArray()).map(row => row.text)).toEqual([note]);
+        expect(await table.vectorSearch(Array(384).fill(0.1)).toArray()).toHaveLength(1);
+        expect(await table.search('Snapshotmarker', 'fts').toArray()).toHaveLength(1);
+      }
+    } finally { table.close(); db.close(); }
     expect(await prepare()).toEqual({ ...result, reused: true });
   });
 
-  it('publishes a new generation for policy 2 snapshots without modifying the old export', async () => {
+  it.each([2, 3])('publishes a new generation for policy %i snapshots without modifying the old export', async oldPolicy => {
     await seed(1);
     const sourceFiles = await Promise.all(Object.entries(await inventory(store)).map(async ([relative, sha256]) => ({
       path: relative, bytes: (await fs.stat(path.join(store, relative))).size, sha256,
     })));
     sourceFiles.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
     const first = await prepare();
-    // Reconstruct a policy 2 generation's name and manifest from the same
+    // Reconstruct an older generation's name and manifest from the same
     // source inventory, so the source itself stays unchanged across the upgrade.
     const oldFingerprint = createHash('sha256').update(JSON.stringify({
-      policy: 2, rulesFingerprint: first.rulesFingerprint, engine: first.compatibility.lanceDbVersion, files: sourceFiles,
+      policy: oldPolicy, rulesFingerprint: first.rulesFingerprint, engine: first.compatibility.lanceDbVersion, files: sourceFiles,
     })).digest('hex');
     const oldPath = path.join(store, 'snapshots', oldFingerprint);
     const manifestPath = path.join(first.snapshotPath, 'snapshot.json');
     const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
-    manifest.policyVersion = 2;
+    manifest.policyVersion = oldPolicy;
     manifest.result = { ...first, snapshotPath: oldPath, sourceFingerprint: oldFingerprint,
-      retention: { ...first.retention, deleteUnverified: false } };
+      retention: { ...first.retention, deleteUnverified: oldPolicy >= 3 } };
     await fs.writeFile(manifestPath, JSON.stringify(manifest));
     if (first.snapshotPath !== oldPath) await fs.rename(first.snapshotPath, oldPath);
     const oldInventory = await inventory(oldPath);

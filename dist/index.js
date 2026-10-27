@@ -34603,6 +34603,15 @@ async function openNotes(basePath) {
     throw error2;
   }
 }
+async function normalizeCleanupTimestamps(copyPath, files, versions) {
+  const oldestManifestTime = versions.reduce((oldest, version2) => Math.min(oldest, version2.timestamp.getTime()), Infinity);
+  const timestamp = new Date(oldestManifestTime - 1e3);
+  for (const file2 of files) {
+    if (/^lancedb\/notes\.lance\/(data|_indices|_deletions|_transactions)\//.test(file2.path)) {
+      await fs7.utimes(path5.join(copyPath, file2.path), timestamp, timestamp);
+    }
+  }
+}
 async function prepareSnapshot(basePath, expectedSchema, schemaVersion, policy, assertFresh) {
   const snapshotRoot = path5.join(basePath, "snapshots");
   for (const directory of [basePath, snapshotRoot]) {
@@ -34668,8 +34677,10 @@ async function prepareSnapshot(basePath, expectedSchema, schemaVersion, policy, 
     const cutoff = /* @__PURE__ */ new Date();
     try {
       sourceVersion = await table.version();
-      versionsBefore = (await table.listVersions()).map((version2) => version2.version);
+      const versions = await table.listVersions();
+      versionsBefore = versions.map((version2) => version2.version);
       validation = await inspectTable(table, expectedSchema, hashes, policy);
+      await normalizeCleanupTimestamps(temporaryPath, sourceFiles, versions);
       await table.optimize({ cleanupOlderThan: cutoff, deleteUnverified: true });
       versionsRetained = (await table.listVersions()).map((version2) => version2.version);
     } finally {
@@ -34727,7 +34738,7 @@ var init_snapshot = __esm({
     import_node_crypto2 = require("node:crypto");
     lancedb = __toESM(require("@lancedb/lancedb"));
     init_local_manifest();
-    POLICY_VERSION = 3;
+    POLICY_VERSION = 4;
     COMPANION_FILES = ["file-hashes.json", "schema-version.json", "index-metadata.json"];
     PAYLOAD_ENTRIES = ["lancedb", ...COMPANION_FILES];
     MANIFEST_FILE = "snapshot.json";

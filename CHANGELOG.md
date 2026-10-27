@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Preserve file timestamps and remove recent orphan files when maintaining the private snapshot copy. Snapshot policy version 3 regenerates exports instead of reusing older generations. Live-index retention and existing published exports remain unchanged. Fixes #31.
+- Normalize cleanup file timestamps in the private snapshot copy and remove orphan files, including those newer than the latest manifest. Snapshot policy version 4 regenerates exports instead of reusing older generations. Live-index retention and existing published exports remain unchanged. Fixes #31.
 
 ## [2.3.0] - 2026-10-23
 

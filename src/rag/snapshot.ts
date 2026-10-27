@@ -7,7 +7,7 @@ import type { Schema } from 'apache-arrow';
 import { NotePolicy } from '../note-policy.js';
 import { assertLocalManifest } from './local-manifest.js';
 
-const POLICY_VERSION = 3;
+const POLICY_VERSION = 4;
 const COMPANION_FILES = ['file-hashes.json', 'schema-version.json', 'index-metadata.json'];
 const PAYLOAD_ENTRIES = ['lancedb', ...COMPANION_FILES];
 const MANIFEST_FILE = 'snapshot.json';
@@ -162,6 +162,20 @@ async function openNotes(basePath: string) {
   } catch (error) { db.close(); throw error; }
 }
 
+async function normalizeCleanupTimestamps(copyPath: string, files: Inventory, versions: lancedb.Version[]) {
+  // Lance filters file listings by the earliest retained manifest before it
+  // considers deleteUnverified. Make all copied cleanup candidates eligible,
+  // including abandoned writes newer than the latest manifest. The one-second
+  // margin accommodates timestamp precision. Lance still checks references.
+  const oldestManifestTime = versions.reduce((oldest, version) => Math.min(oldest, version.timestamp.getTime()), Infinity);
+  const timestamp = new Date(oldestManifestTime - 1000);
+  for (const file of files) {
+    if (/^lancedb\/notes\.lance\/(data|_indices|_deletions|_transactions)\//.test(file.path)) {
+      await fs.utimes(path.join(copyPath, file.path), timestamp, timestamp);
+    }
+  }
+}
+
 /** Caller holds both index locks until this operation finishes. */
 export async function prepareSnapshot(
   basePath: string,
@@ -229,8 +243,8 @@ export async function prepareSnapshot(
   try {
     // Copy named payload entries only. Locks, temporary metadata, and other
     // exports never belong to the shared database. No hard links are used.
-    // Preserve mtimes: Lance skips cleanup candidates newer than the earliest
-    // retained manifest, even when deleteUnverified is enabled.
+    // Preserve metadata timestamps here; normalize cleanup candidates only
+    // after checking the private copy's contents and database versions.
     for (const entry of PAYLOAD_ENTRIES) {
       await fs.cp(path.join(basePath, entry), path.join(temporaryPath, entry), { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true });
     }
@@ -246,10 +260,12 @@ export async function prepareSnapshot(
     const cutoff = new Date();
     try {
       sourceVersion = await table.version();
-      versionsBefore = (await table.listVersions()).map(version => version.version);
+      const versions = await table.listVersions();
+      versionsBefore = versions.map(version => version.version);
       validation = await inspectTable(table, expectedSchema, hashes, policy);
       // This unpublished copy has no concurrent readers or writers. External
       // references were rejected before copying, so cleanup stays in this copy.
+      await normalizeCleanupTimestamps(temporaryPath, sourceFiles, versions);
       await table.optimize({ cleanupOlderThan: cutoff, deleteUnverified: true });
       versionsRetained = (await table.listVersions()).map(version => version.version);
     } finally { table.close(); db.close(); }
