@@ -161,7 +161,8 @@ describe('index snapshots', () => {
     expect(await prepare()).toEqual({ ...result, reused: true });
   });
 
-  it.each([2, 3])('publishes a new generation for policy %i snapshots without modifying the old export', async oldPolicy => {
+  it('publishes a new generation for policy 2 snapshots without modifying the old export', async () => {
+    const oldPolicy = 2;
     await seed(1);
     const sourceFiles = await Promise.all(Object.entries(await inventory(store)).map(async ([relative, sha256]) => ({
       path: relative, bytes: (await fs.stat(path.join(store, relative))).size, sha256,
@@ -178,7 +179,7 @@ describe('index snapshots', () => {
     const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
     manifest.policyVersion = oldPolicy;
     manifest.result = { ...first, snapshotPath: oldPath, sourceFingerprint: oldFingerprint,
-      retention: { ...first.retention, deleteUnverified: oldPolicy >= 3 } };
+      retention: { ...first.retention, deleteUnverified: false } };
     await fs.writeFile(manifestPath, JSON.stringify(manifest));
     if (first.snapshotPath !== oldPath) await fs.rename(first.snapshotPath, oldPath);
     const oldInventory = await inventory(oldPath);

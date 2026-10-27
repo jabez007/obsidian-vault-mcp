@@ -7,7 +7,7 @@ import type { Schema } from 'apache-arrow';
 import { NotePolicy } from '../note-policy.js';
 import { assertLocalManifest } from './local-manifest.js';
 
-const POLICY_VERSION = 4;
+const POLICY_VERSION = 3;
 const COMPANION_FILES = ['file-hashes.json', 'schema-version.json', 'index-metadata.json'];
 const PAYLOAD_ENTRIES = ['lancedb', ...COMPANION_FILES];
 const MANIFEST_FILE = 'snapshot.json';
