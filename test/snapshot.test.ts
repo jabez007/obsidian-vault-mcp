@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { promisify } from 'node:util';
@@ -74,6 +74,104 @@ describe('index snapshots', () => {
     table.close(); db.close();
     return prototype;
   }
+
+  it.each(['edit', 'delete'])('removes unreferenced data after a note %s', async change => {
+    await seed();
+    if (change === 'edit') {
+      await fs.writeFile(path.join(vault, 'note.md'), `${note} Revised.`);
+      expect((await indexer.indexFile(vault, 'note.md', tmp, 'snapshot')).success).toBe(true);
+    } else {
+      await fs.writeFile(path.join(vault, 'deleted.md'), `${note} To be deleted.`);
+      expect((await indexer.indexFile(vault, 'deleted.md', tmp, 'snapshot')).success).toBe(true);
+      await fs.unlink(path.join(vault, 'deleted.md'));
+      expect((await indexer.indexVault(vault, false, tmp, 'snapshot')).success).toBe(true);
+    }
+    const liveBefore = await inventory(store);
+    const result = await prepare();
+    expect(await inventory(store)).toEqual(liveBefore);
+    expect(result.validation).toMatchObject({ rows: 1, vectorQuery: true, fullTextQuery: true });
+
+    const tablePath = path.join(result.snapshotPath, 'lancedb', 'notes.lance');
+    const manifests = await Promise.all((await fs.readdir(path.join(tablePath, '_versions')))
+      .map(file => fs.readFile(path.join(tablePath, '_versions', file))));
+    // Local Lance 4 manifests store data filenames verbatim. Check every
+    // retained version, since maintenance may legitimately retain more than one.
+    const unreferenced = (await fs.readdir(path.join(tablePath, 'data')))
+      .filter(file => !manifests.some(manifest => manifest.includes(Buffer.from(file))));
+    expect(unreferenced).toEqual([]);
+
+    const db = await lancedb.connect(path.join(result.snapshotPath, 'lancedb'));
+    const table = await db.openTable('notes');
+    try {
+      for (const version of result.versionsRetained) {
+        await table.checkout(version);
+        const rows = await table.query().toArray();
+        expect(rows.map(row => row.path)).toEqual(['note.md']);
+        expect(rows[0].text).toBe(change === 'edit' ? `${note} Revised.` : note);
+      }
+    } finally { table.close(); db.close(); }
+  });
+
+  it('removes recent orphan data, index, and transaction files only from the private copy', async () => {
+    await seed();
+    const tablePath = path.join(store, 'lancedb', 'notes.lance');
+    const orphanFiles = [
+      `data/${randomUUID()}.lance`,
+      `_indices/${randomUUID()}/index.idx`,
+      `_transactions/${randomUUID()}.txn`,
+    ];
+    // Model abandoned writes from an hour ago, well inside the seven-day
+    // protection window and older than every retained manifest.
+    const recent = new Date(Date.now() - 3600000);
+    const originalMtimes = new Map<string, number>();
+    for (const relative of orphanFiles) {
+      const file = path.join(tablePath, relative);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, 'abandoned transaction payload');
+      await fs.utimes(file, recent, recent);
+      originalMtimes.set(relative, (await fs.stat(file)).mtimeMs);
+    }
+    const liveBefore = await inventory(store);
+    const result = await prepare();
+    const exported = await inventory(result.snapshotPath);
+    for (const relative of orphanFiles) {
+      expect(exported[`lancedb/notes.lance/${relative}`]).toBeUndefined();
+      expect((await fs.stat(path.join(tablePath, relative))).mtimeMs).toBe(originalMtimes.get(relative));
+    }
+    expect(await inventory(store)).toEqual(liveBefore);
+    expect(result.retention.deleteUnverified).toBe(true);
+    expect(result.validation).toMatchObject({ rows: 1, vectorQuery: true, fullTextQuery: true });
+    expect(await prepare()).toEqual({ ...result, reused: true });
+  });
+
+  it('publishes a new generation for policy 2 snapshots without modifying the old export', async () => {
+    await seed(1);
+    const sourceFiles = await Promise.all(Object.entries(await inventory(store)).map(async ([relative, sha256]) => ({
+      path: relative, bytes: (await fs.stat(path.join(store, relative))).size, sha256,
+    })));
+    sourceFiles.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+    const first = await prepare();
+    // Reconstruct a policy 2 generation's name and manifest from the same
+    // source inventory, so the source itself stays unchanged across the upgrade.
+    const oldFingerprint = createHash('sha256').update(JSON.stringify({
+      policy: 2, rulesFingerprint: first.rulesFingerprint, engine: first.compatibility.lanceDbVersion, files: sourceFiles,
+    })).digest('hex');
+    const oldPath = path.join(store, 'snapshots', oldFingerprint);
+    const manifestPath = path.join(first.snapshotPath, 'snapshot.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    manifest.policyVersion = 2;
+    manifest.result = { ...first, snapshotPath: oldPath, sourceFingerprint: oldFingerprint,
+      retention: { ...first.retention, deleteUnverified: false } };
+    await fs.writeFile(manifestPath, JSON.stringify(manifest));
+    if (first.snapshotPath !== oldPath) await fs.rename(first.snapshotPath, oldPath);
+    const oldInventory = await inventory(oldPath);
+
+    const result = await prepare();
+    expect(result.reused).toBe(false);
+    expect(result.snapshotPath).not.toBe(oldPath);
+    expect(await inventory(oldPath)).toEqual(oldInventory);
+    expect(await prepare()).toEqual({ ...result, reused: true });
+  });
 
   it('exports searchable rows and metadata, removes old files, and never loads embeddings', async () => {
     await seed(8);

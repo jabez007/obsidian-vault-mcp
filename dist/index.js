@@ -34655,7 +34655,7 @@ async function prepareSnapshot(basePath, expectedSchema, schemaVersion, policy, 
   const temporaryPath = await fs7.mkdtemp(path5.join(snapshotRoot, ".preparing-"));
   try {
     for (const entry of PAYLOAD_ENTRIES) {
-      await fs7.cp(path5.join(basePath, entry), path5.join(temporaryPath, entry), { recursive: true, errorOnExist: true, force: false });
+      await fs7.cp(path5.join(basePath, entry), path5.join(temporaryPath, entry), { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true });
     }
     if (!sameInventory(sourceFiles, await inventory(temporaryPath)) || !sameInventory(sourceFiles, await inventory(basePath, PAYLOAD_ENTRIES))) {
       throw new Error("Index changed while capturing the snapshot. Retry after indexing finishes.");
@@ -34670,7 +34670,7 @@ async function prepareSnapshot(basePath, expectedSchema, schemaVersion, policy, 
       sourceVersion = await table.version();
       versionsBefore = (await table.listVersions()).map((version2) => version2.version);
       validation = await inspectTable(table, expectedSchema, hashes, policy);
-      await table.optimize({ cleanupOlderThan: cutoff, deleteUnverified: false });
+      await table.optimize({ cleanupOlderThan: cutoff, deleteUnverified: true });
       versionsRetained = (await table.listVersions()).map((version2) => version2.version);
     } finally {
       table.close();
@@ -34703,7 +34703,7 @@ async function prepareSnapshot(basePath, expectedSchema, schemaVersion, policy, 
       versionsBefore,
       versionsRetained,
       versionsRemoved: versionsBefore.filter((version2) => !versionsRetained.includes(version2)),
-      retention: { olderThan: cutoff.toISOString(), deleteUnverified: false },
+      retention: { olderThan: cutoff.toISOString(), deleteUnverified: true },
       compaction: "once-per-source-state",
       validation,
       compatibility: { notesTableSchemaVersion: schemaVersion, lanceDbVersion: ENGINE_VERSION }
@@ -34727,7 +34727,7 @@ var init_snapshot = __esm({
     import_node_crypto2 = require("node:crypto");
     lancedb = __toESM(require("@lancedb/lancedb"));
     init_local_manifest();
-    POLICY_VERSION = 2;
+    POLICY_VERSION = 3;
     COMPANION_FILES = ["file-hashes.json", "schema-version.json", "index-metadata.json"];
     PAYLOAD_ENTRIES = ["lancedb", ...COMPANION_FILES];
     MANIFEST_FILE = "snapshot.json";

@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Preserve file timestamps and remove recent orphan files when maintaining the private snapshot copy. Snapshot policy version 3 regenerates exports instead of reusing older generations. Live-index retention and existing published exports remain unchanged. Fixes #31.
+
 ## [2.3.0] - 2026-10-23
 
 - Validate required arguments, types, nonempty identifiers, array items, enum values, and frontmatter update modes before handlers or vault access. Preserve empty note content and replacement text, and accept whitespace-only replacement search text. Add read-only CLI tool help. Reject unknown CLI options and positional arguments, which 2.2.0 ignored. Normalize typed CLI values before shared validation. Fixes #29.

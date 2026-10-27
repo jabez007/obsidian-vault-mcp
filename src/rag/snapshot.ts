@@ -7,7 +7,7 @@ import type { Schema } from 'apache-arrow';
 import { NotePolicy } from '../note-policy.js';
 import { assertLocalManifest } from './local-manifest.js';
 
-const POLICY_VERSION = 2;
+const POLICY_VERSION = 3;
 const COMPANION_FILES = ['file-hashes.json', 'schema-version.json', 'index-metadata.json'];
 const PAYLOAD_ENTRIES = ['lancedb', ...COMPANION_FILES];
 const MANIFEST_FILE = 'snapshot.json';
@@ -28,7 +28,7 @@ export interface SnapshotResult {
   versionsBefore: number[];
   versionsRetained: number[];
   versionsRemoved: number[];
-  retention: { olderThan: string; deleteUnverified: false };
+  retention: { olderThan: string; deleteUnverified: true };
   compaction: 'once-per-source-state';
   validation: { rows: number; contentSha256: string; vectorQuery: boolean; fullTextQuery: boolean };
   compatibility: { notesTableSchemaVersion: number; lanceDbVersion: string };
@@ -229,8 +229,10 @@ export async function prepareSnapshot(
   try {
     // Copy named payload entries only. Locks, temporary metadata, and other
     // exports never belong to the shared database. No hard links are used.
+    // Preserve mtimes: Lance skips cleanup candidates newer than the earliest
+    // retained manifest, even when deleteUnverified is enabled.
     for (const entry of PAYLOAD_ENTRIES) {
-      await fs.cp(path.join(basePath, entry), path.join(temporaryPath, entry), { recursive: true, errorOnExist: true, force: false });
+      await fs.cp(path.join(basePath, entry), path.join(temporaryPath, entry), { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true });
     }
     if (!sameInventory(sourceFiles, await inventory(temporaryPath)) ||
         !sameInventory(sourceFiles, await inventory(basePath, PAYLOAD_ENTRIES))) {
@@ -246,7 +248,9 @@ export async function prepareSnapshot(
       sourceVersion = await table.version();
       versionsBefore = (await table.listVersions()).map(version => version.version);
       validation = await inspectTable(table, expectedSchema, hashes, policy);
-      await table.optimize({ cleanupOlderThan: cutoff, deleteUnverified: false });
+      // This unpublished copy has no concurrent readers or writers. External
+      // references were rejected before copying, so cleanup stays in this copy.
+      await table.optimize({ cleanupOlderThan: cutoff, deleteUnverified: true });
       versionsRetained = (await table.listVersions()).map(version => version.version);
     } finally { table.close(); db.close(); }
 
@@ -267,7 +271,7 @@ export async function prepareSnapshot(
       success: true, snapshotPath, rulesFingerprint: policy.fingerprint, sourceFingerprint, sourceVersion, reused: false,
       before: totals(sourceFiles), after: totals(files), versionsBefore, versionsRetained,
       versionsRemoved: versionsBefore.filter(version => !versionsRetained.includes(version)),
-      retention: { olderThan: cutoff.toISOString(), deleteUnverified: false },
+      retention: { olderThan: cutoff.toISOString(), deleteUnverified: true },
       compaction: 'once-per-source-state', validation,
       compatibility: { notesTableSchemaVersion: schemaVersion, lanceDbVersion: ENGINE_VERSION },
     };
