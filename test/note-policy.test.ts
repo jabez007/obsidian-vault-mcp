@@ -504,7 +504,7 @@ describe('vault ignore policy', () => {
     const first = await prepare('# staged\r\n/drafts/\r\n');
     expect(first.rulesFingerprint).toBe((await metadata()).rulesFingerprint);
     const manifest = JSON.parse(await fs.readFile(path.join(first.snapshotPath, 'snapshot.json'), 'utf8'));
-    expect(manifest).toMatchObject({ policyVersion: 2, rulesFingerprint: first.rulesFingerprint });
+    expect(manifest).toMatchObject({ policyVersion: 3, rulesFingerprint: first.rulesFingerprint });
     await expect(prepare('')).rejects.toThrow('Supplied ignore rules');
     await write(IGNORE_FILE_NAME, '# edited comments\n/drafts/\n');
     expect(await prepare()).toMatchObject({ sourceFingerprint: first.sourceFingerprint, reused: true });
