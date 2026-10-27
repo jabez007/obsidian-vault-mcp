@@ -1,3 +1,23 @@
+# Release v2.4.0
+
+## Summary
+
+Version 2.4.0 removes files from index snapshot exports when no retained version references them. In 2.3.0, editing or deleting notes could leave a week of obsolete data and index files in the next export. In one vault, archiving 76 notes grew an export from 47.5 MB to 121.4 MB, past the 100 MB `obsidian.snapshotMaxBytes` limit that the template's docs suggest.
+
+## Highlights
+
+- `obsidian_prepare_index_snapshot` cleans its private copy with `deleteUnverified: true`. Lance deletes only files that no retained version references.
+- Before cleanup, preparation sets the copy's data, index, deletion, and transaction files to a time before the oldest manifest. Lance then also removes orphans from writes that were abandoned after the last commit.
+- The live index is never changed. It keeps its seven-day retention, and exports that were already published stay as they are.
+
+## Upgrade
+
+The snapshot manifest's `policyVersion` is now 3, and the result's `retention.deleteUnverified` is `true`. Callers that check either value need an update. The `johnny-decimal-zettelkasten` template accepts only policy 2 until it updates its snapshot script.
+
+The first preparation after upgrading writes a new export instead of reusing one prepared by 2.3.0. Commit that export as usual. Existing indexes need no rebuild or rescan.
+
+---
+
 # Release v2.3.0
 
 ## Summary

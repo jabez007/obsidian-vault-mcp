@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "obsidian-vault-mcp",
   "displayName": "Obsidian Vault MCP",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Obsidian vault MCP server with local RAG capabilities for Claude Code.",
   "author": {
     "name": "jabez007",
