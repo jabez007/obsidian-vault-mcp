@@ -75,6 +75,52 @@ describe('index snapshots', () => {
     return prototype;
   }
 
+  it.each([0, 20])('removes pre-compaction data after rewriting a partially deleted fragment with %s ms maintenance delay', async delay => {
+    // Both notes start in one fragment. Editing one leaves a deletion in that
+    // fragment, so export compaction must rewrite data still used by the other.
+    await fs.writeFile(path.join(vault, 'other.md'), `${note} Other note.`);
+    await seed();
+    await fs.writeFile(path.join(vault, 'note.md'), `${note} Revised.`);
+    expect((await indexer.indexFile(vault, 'note.md', tmp, 'snapshot')).success).toBe(true);
+    const liveBefore = await inventory(store);
+    vi.clearAllMocks();
+    if (delay) {
+      const prototype = await tablePrototype();
+      const optimize = prototype.optimize;
+      vi.spyOn(prototype, 'optimize').mockImplementation(async function(this: lancedb.Table, ...args: unknown[]) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return optimize.apply(this, args);
+      });
+    }
+
+    const result = await prepare();
+    expect(await inventory(store)).toEqual(liveBefore);
+    expect(Embedder.getInstance).not.toHaveBeenCalled();
+    expect(result.validation).toMatchObject({ rows: 2, vectorQuery: true, fullTextQuery: true });
+    const tablePath = path.join(result.snapshotPath, 'lancedb', 'notes.lance');
+    const manifests = await fs.readdir(path.join(tablePath, '_versions'));
+    const dataFiles = await fs.readdir(path.join(tablePath, 'data'));
+    expect(dataFiles).toHaveLength(1);
+    for (const file of manifests) {
+      const manifest = await fs.readFile(path.join(tablePath, '_versions', file));
+      expect(manifest.includes(Buffer.from(dataFiles[0]))).toBe(true);
+    }
+
+    const db = await lancedb.connect(path.join(result.snapshotPath, 'lancedb'));
+    const table = await db.openTable('notes');
+    try {
+      expect(result.versionsRetained).toContain(await table.version());
+      for (const version of result.versionsRetained) {
+        await table.checkout(version);
+        const rows = await table.query().toArray();
+        expect(rows.map(row => row.text).sort()).toEqual([`${note} Other note.`, `${note} Revised.`]);
+        expect(await table.vectorSearch(Array(384).fill(0.1)).toArray()).toHaveLength(2);
+        expect(await table.search('Snapshotmarker', 'fts').toArray()).toHaveLength(2);
+      }
+    } finally { table.close(); db.close(); }
+    expect(await prepare()).toEqual({ ...result, reused: true });
+  });
+
   it.each(['edit', 'delete'])('removes unreferenced data after a note %s', async change => {
     await seed();
     if (change === 'edit') {
@@ -161,8 +207,7 @@ describe('index snapshots', () => {
     expect(await prepare()).toEqual({ ...result, reused: true });
   });
 
-  it('publishes a new generation for policy 2 snapshots without modifying the old export', async () => {
-    const oldPolicy = 2;
+  it.each([2, 3])('publishes a new generation for policy %s snapshots without modifying the old export', async oldPolicy => {
     await seed(1);
     const sourceFiles = await Promise.all(Object.entries(await inventory(store)).map(async ([relative, sha256]) => ({
       path: relative, bytes: (await fs.stat(path.join(store, relative))).size, sha256,
@@ -179,7 +224,7 @@ describe('index snapshots', () => {
     const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
     manifest.policyVersion = oldPolicy;
     manifest.result = { ...first, snapshotPath: oldPath, sourceFingerprint: oldFingerprint,
-      retention: { ...first.retention, deleteUnverified: false } };
+      retention: { ...first.retention, deleteUnverified: oldPolicy >= 3 } };
     await fs.writeFile(manifestPath, JSON.stringify(manifest));
     if (first.snapshotPath !== oldPath) await fs.rename(first.snapshotPath, oldPath);
     const oldInventory = await inventory(oldPath);
@@ -395,6 +440,21 @@ describe('index snapshots', () => {
     await expect(prepare()).rejects.toThrow('Interrupted maintenance');
     expect(await fs.readdir(path.join(store, 'snapshots'))).toEqual([]);
     expect(await inventory(store)).toEqual(before);
+    expect((await prepare()).success).toBe(true);
+  });
+
+  it('does not publish a snapshot when compaction keeps rewriting data', async () => {
+    await seed();
+    const before = await inventory(store);
+    const optimize = vi.spyOn(await tablePrototype(), 'optimize').mockResolvedValue({
+      compaction: { filesAdded: 1, filesRemoved: 1, fragmentsAdded: 1, fragmentsRemoved: 1 },
+      prune: { bytesRemoved: 0, oldVersionsRemoved: 0 },
+    });
+    await expect(prepare()).rejects.toThrow('compaction did not settle after three passes');
+    expect(optimize).toHaveBeenCalledTimes(3);
+    expect(await fs.readdir(path.join(store, 'snapshots'))).toEqual([]);
+    expect(await inventory(store)).toEqual(before);
+    optimize.mockRestore();
     expect((await prepare()).success).toBe(true);
   });
 
