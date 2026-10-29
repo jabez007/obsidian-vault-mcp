@@ -34612,6 +34612,16 @@ async function normalizeCleanupTimestamps(copyPath, files, versions) {
     }
   }
 }
+async function maintainSnapshot(table) {
+  for (let pass = 0; pass < MAX_MAINTENANCE_PASSES; pass++) {
+    const versions = await table.listVersions();
+    const latestTimestamp = versions.reduce((latest, version2) => Math.max(latest, version2.timestamp.getTime()), Date.now());
+    const cutoff = new Date(latestTimestamp + 1);
+    const stats = await table.optimize({ cleanupOlderThan: cutoff, deleteUnverified: true });
+    if (stats.compaction.filesAdded === 0 && stats.compaction.filesRemoved === 0) return cutoff;
+  }
+  throw new Error(`Snapshot compaction did not settle after ${MAX_MAINTENANCE_PASSES} passes. No snapshot was published. Run obsidian_rag_index with maintenance=true, then retry.`);
+}
 async function prepareSnapshot(basePath, expectedSchema, schemaVersion, policy, assertFresh) {
   const snapshotRoot = path5.join(basePath, "snapshots");
   for (const directory of [basePath, snapshotRoot]) {
@@ -34674,14 +34684,14 @@ async function prepareSnapshot(basePath, expectedSchema, schemaVersion, policy, 
     let versionsBefore;
     let versionsRetained;
     let validation;
-    const cutoff = /* @__PURE__ */ new Date();
+    let cutoff;
     try {
       sourceVersion = await table.version();
       const versions = await table.listVersions();
       versionsBefore = versions.map((version2) => version2.version);
       validation = await inspectTable(table, expectedSchema, hashes, policy);
       await normalizeCleanupTimestamps(temporaryPath, sourceFiles, versions);
-      await table.optimize({ cleanupOlderThan: cutoff, deleteUnverified: true });
+      cutoff = await maintainSnapshot(table);
       versionsRetained = (await table.listVersions()).map((version2) => version2.version);
     } finally {
       table.close();
@@ -34728,7 +34738,7 @@ async function prepareSnapshot(basePath, expectedSchema, schemaVersion, policy, 
     await fs7.rm(temporaryPath, { recursive: true, force: true });
   }
 }
-var fs7, import_node_fs, path5, import_node_crypto2, lancedb, POLICY_VERSION, COMPANION_FILES, PAYLOAD_ENTRIES, MANIFEST_FILE, ENGINE_VERSION;
+var fs7, import_node_fs, path5, import_node_crypto2, lancedb, POLICY_VERSION, COMPANION_FILES, PAYLOAD_ENTRIES, MANIFEST_FILE, MAX_MAINTENANCE_PASSES, ENGINE_VERSION;
 var init_snapshot = __esm({
   "src/rag/snapshot.ts"() {
     "use strict";
@@ -34738,10 +34748,11 @@ var init_snapshot = __esm({
     import_node_crypto2 = require("node:crypto");
     lancedb = __toESM(require("@lancedb/lancedb"));
     init_local_manifest();
-    POLICY_VERSION = 3;
+    POLICY_VERSION = 4;
     COMPANION_FILES = ["file-hashes.json", "schema-version.json", "index-metadata.json"];
     PAYLOAD_ENTRIES = ["lancedb", ...COMPANION_FILES];
     MANIFEST_FILE = "snapshot.json";
+    MAX_MAINTENANCE_PASSES = 5;
     ENGINE_VERSION = JSON.parse((0, import_node_fs.readFileSync)(path5.join(path5.dirname(require.resolve("@lancedb/lancedb")), "..", "package.json"), "utf8")).version;
   }
 });

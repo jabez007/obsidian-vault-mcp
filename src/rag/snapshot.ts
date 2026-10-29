@@ -7,10 +7,13 @@ import type { Schema } from 'apache-arrow';
 import { NotePolicy } from '../note-policy.js';
 import { assertLocalManifest } from './local-manifest.js';
 
-const POLICY_VERSION = 3;
+const POLICY_VERSION = 4;
 const COMPANION_FILES = ['file-hashes.json', 'schema-version.json', 'index-metadata.json'];
 const PAYLOAD_ENTRIES = ['lancedb', ...COMPANION_FILES];
 const MANIFEST_FILE = 'snapshot.json';
+// A 6,039-row vault needed two compacting passes and one settling pass (#33).
+// Two more passes leave margin before a failed export blocks a vault commit.
+const MAX_MAINTENANCE_PASSES = 5;
 const ENGINE_VERSION: string = JSON.parse(readFileSync(path.join(path.dirname(require.resolve('@lancedb/lancedb')), '..', 'package.json'), 'utf8')).version;
 
 type Inventory = Array<{ path: string; bytes: number; sha256: string }>;
@@ -176,6 +179,22 @@ async function normalizeCleanupTimestamps(copyPath: string, files: Inventory, ve
   }
 }
 
+async function maintainSnapshot(table: lancedb.Table): Promise<Date> {
+  // Index optimization follows pruning in LanceDB 0.27.2. It can make more
+  // fragments eligible for compaction on the next pass. Finish with a pass
+  // that rewrites no data, so its retained versions share the current files.
+  for (let pass = 0; pass < MAX_MAINTENANCE_PASSES; pass++) {
+    const versions = await table.listVersions();
+    // Include every existing version, even when commits share a millisecond.
+    // Only this unpublished copy is pruned; Lance always keeps its latest version.
+    const latestTimestamp = versions.reduce((latest, version) => Math.max(latest, version.timestamp.getTime()), Date.now());
+    const cutoff = new Date(latestTimestamp + 1);
+    const stats = await table.optimize({ cleanupOlderThan: cutoff, deleteUnverified: true });
+    if (stats.compaction.filesAdded === 0 && stats.compaction.filesRemoved === 0) return cutoff;
+  }
+  throw new Error(`Snapshot compaction did not settle after ${MAX_MAINTENANCE_PASSES} passes. No snapshot was published. Run obsidian_rag_index with maintenance=true, then retry.`);
+}
+
 /** Caller holds both index locks until this operation finishes. */
 export async function prepareSnapshot(
   basePath: string,
@@ -257,7 +276,7 @@ export async function prepareSnapshot(
     let versionsBefore: number[];
     let versionsRetained: number[];
     let validation: SnapshotResult['validation'];
-    const cutoff = new Date();
+    let cutoff: Date;
     try {
       sourceVersion = await table.version();
       const versions = await table.listVersions();
@@ -266,7 +285,7 @@ export async function prepareSnapshot(
       // This unpublished copy has no concurrent readers or writers. External
       // references were rejected before copying, so cleanup stays in this copy.
       await normalizeCleanupTimestamps(temporaryPath, sourceFiles, versions);
-      await table.optimize({ cleanupOlderThan: cutoff, deleteUnverified: true });
+      cutoff = await maintainSnapshot(table);
       versionsRetained = (await table.listVersions()).map(version => version.version);
     } finally { table.close(); db.close(); }
 

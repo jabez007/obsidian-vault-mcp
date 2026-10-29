@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-10-29
+
+- Remove duplicated pre-compaction data from snapshot exports with bounded maintenance passes that finish without rewriting data. Snapshot policy version 4 regenerates exports made under older policies. The live index and published exports remain unchanged. Addresses the data duplication in #33; LanceDB can still retain multiple versions and index files.
+
 ## [2.4.0] - 2026-10-27
 
 - Normalize cleanup file timestamps in the private snapshot copy and remove orphan files, including those newer than the latest manifest. Snapshot policy version 3 regenerates exports instead of reusing older generations. Live-index retention and existing published exports remain unchanged. Fixes #31.

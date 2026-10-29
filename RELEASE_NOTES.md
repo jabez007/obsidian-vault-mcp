@@ -1,3 +1,13 @@
+# Release v2.4.1
+
+Snapshot preparation now removes duplicated data left by compaction. Maintenance runs for up to five passes and finishes only when a pass adds or removes no data files. If compaction does not settle, preparation fails without publishing an export.
+
+Snapshot policy version 4 regenerates exports prepared under older policies. Consumers that enforce an allowed policy version must accept version 4 before using these exports. Existing indexes need no rebuild or rescan. The live index and previously published exports remain unchanged.
+
+This addresses the duplicated note data in #33. LanceDB 0.27.2 optimizes indexes after version cleanup, so exports can still retain multiple versions and FTS index files. The issue's single-version requirement remains open.
+
+---
+
 # Release v2.4.0
 
 ## Summary

@@ -1,6 +1,6 @@
 {
   "name": "@jabez007/obsidian-vault-mcp",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "Obsidian vault MCP server with local RAG for Claude Code, Codex, OpenCode, and other MCP hosts",
   "main": "dist/index.js",
   "bin": {
