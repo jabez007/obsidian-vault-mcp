@@ -34613,14 +34613,14 @@ async function normalizeCleanupTimestamps(copyPath, files, versions) {
   }
 }
 async function maintainSnapshot(table) {
-  for (let pass = 0; pass < 3; pass++) {
+  for (let pass = 0; pass < MAX_MAINTENANCE_PASSES; pass++) {
     const versions = await table.listVersions();
     const latestTimestamp = versions.reduce((latest, version2) => Math.max(latest, version2.timestamp.getTime()), Date.now());
     const cutoff = new Date(latestTimestamp + 1);
     const stats = await table.optimize({ cleanupOlderThan: cutoff, deleteUnverified: true });
     if (stats.compaction.filesAdded === 0 && stats.compaction.filesRemoved === 0) return cutoff;
   }
-  throw new Error("Snapshot compaction did not settle after three passes. No snapshot was published. Run obsidian_rag_index with maintenance=true, then retry.");
+  throw new Error(`Snapshot compaction did not settle after ${MAX_MAINTENANCE_PASSES} passes. No snapshot was published. Run obsidian_rag_index with maintenance=true, then retry.`);
 }
 async function prepareSnapshot(basePath, expectedSchema, schemaVersion, policy, assertFresh) {
   const snapshotRoot = path5.join(basePath, "snapshots");
@@ -34738,7 +34738,7 @@ async function prepareSnapshot(basePath, expectedSchema, schemaVersion, policy, 
     await fs7.rm(temporaryPath, { recursive: true, force: true });
   }
 }
-var fs7, import_node_fs, path5, import_node_crypto2, lancedb, POLICY_VERSION, COMPANION_FILES, PAYLOAD_ENTRIES, MANIFEST_FILE, ENGINE_VERSION;
+var fs7, import_node_fs, path5, import_node_crypto2, lancedb, POLICY_VERSION, COMPANION_FILES, PAYLOAD_ENTRIES, MANIFEST_FILE, MAX_MAINTENANCE_PASSES, ENGINE_VERSION;
 var init_snapshot = __esm({
   "src/rag/snapshot.ts"() {
     "use strict";
@@ -34752,6 +34752,7 @@ var init_snapshot = __esm({
     COMPANION_FILES = ["file-hashes.json", "schema-version.json", "index-metadata.json"];
     PAYLOAD_ENTRIES = ["lancedb", ...COMPANION_FILES];
     MANIFEST_FILE = "snapshot.json";
+    MAX_MAINTENANCE_PASSES = 5;
     ENGINE_VERSION = JSON.parse((0, import_node_fs.readFileSync)(path5.join(path5.dirname(require.resolve("@lancedb/lancedb")), "..", "package.json"), "utf8")).version;
   }
 });

@@ -258,7 +258,7 @@ Published exports remain unchanged when the live database changes or undergoes m
 
 ### Maintenance and compatibility
 
-Each new source state gets up to three `optimize()` calls on its private copy with `deleteUnverified: true`. Preparation stops when a pass adds or removes no data files. That final pass removes versions that still reference data replaced by earlier compaction passes. Each cutoff includes every version present before that pass. If compaction still changes data files on the third pass, preparation fails without publishing an export.
+Each new source state gets up to five `optimize()` calls on its private copy with `deleteUnverified: true`. Preparation stops when a pass adds or removes no data files. That final pass removes versions that still reference data replaced by earlier compaction passes. Each cutoff includes every version present before that pass. If compaction still changes data files on the fifth pass, preparation fails without publishing an export.
 
 Before maintenance, preparation dates the copied data, index, deletion, and transaction files to before the oldest manifest. This makes orphan files eligible for Lance cleanup even if an abandoned write created them after the latest manifest. Lance decides which files to delete based on retained references. Manifest and companion JSON timestamps are preserved during copying. Aggressive cleanup is confined to the unpublished copy, which has no concurrent readers or writers. Reusing an export does not call maintenance or rewrite files. Live-index maintenance retains its existing seven-day policy.
 

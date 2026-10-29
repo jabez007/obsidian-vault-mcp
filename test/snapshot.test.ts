@@ -450,8 +450,8 @@ describe('index snapshots', () => {
       compaction: { filesAdded: 1, filesRemoved: 1, fragmentsAdded: 1, fragmentsRemoved: 1 },
       prune: { bytesRemoved: 0, oldVersionsRemoved: 0 },
     });
-    await expect(prepare()).rejects.toThrow('compaction did not settle after three passes');
-    expect(optimize).toHaveBeenCalledTimes(3);
+    await expect(prepare()).rejects.toThrow('compaction did not settle after 5 passes');
+    expect(optimize).toHaveBeenCalledTimes(5);
     expect(await fs.readdir(path.join(store, 'snapshots'))).toEqual([]);
     expect(await inventory(store)).toEqual(before);
     optimize.mockRestore();

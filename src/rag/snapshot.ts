@@ -11,6 +11,9 @@ const POLICY_VERSION = 4;
 const COMPANION_FILES = ['file-hashes.json', 'schema-version.json', 'index-metadata.json'];
 const PAYLOAD_ENTRIES = ['lancedb', ...COMPANION_FILES];
 const MANIFEST_FILE = 'snapshot.json';
+// A 6,039-row vault needed two compacting passes and one settling pass (#33).
+// Two more passes leave margin before a failed export blocks a vault commit.
+const MAX_MAINTENANCE_PASSES = 5;
 const ENGINE_VERSION: string = JSON.parse(readFileSync(path.join(path.dirname(require.resolve('@lancedb/lancedb')), '..', 'package.json'), 'utf8')).version;
 
 type Inventory = Array<{ path: string; bytes: number; sha256: string }>;
@@ -180,7 +183,7 @@ async function maintainSnapshot(table: lancedb.Table): Promise<Date> {
   // Index optimization follows pruning in LanceDB 0.27.2. It can make more
   // fragments eligible for compaction on the next pass. Finish with a pass
   // that rewrites no data, so its retained versions share the current files.
-  for (let pass = 0; pass < 3; pass++) {
+  for (let pass = 0; pass < MAX_MAINTENANCE_PASSES; pass++) {
     const versions = await table.listVersions();
     // Include every existing version, even when commits share a millisecond.
     // Only this unpublished copy is pruned; Lance always keeps its latest version.
@@ -189,7 +192,7 @@ async function maintainSnapshot(table: lancedb.Table): Promise<Date> {
     const stats = await table.optimize({ cleanupOlderThan: cutoff, deleteUnverified: true });
     if (stats.compaction.filesAdded === 0 && stats.compaction.filesRemoved === 0) return cutoff;
   }
-  throw new Error('Snapshot compaction did not settle after three passes. No snapshot was published. Run obsidian_rag_index with maintenance=true, then retry.');
+  throw new Error(`Snapshot compaction did not settle after ${MAX_MAINTENANCE_PASSES} passes. No snapshot was published. Run obsidian_rag_index with maintenance=true, then retry.`);
 }
 
 /** Caller holds both index locks until this operation finishes. */
